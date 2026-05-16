@@ -1,0 +1,964 @@
+const GRID_SIZE = 7;
+const CELL_SIZE = 50;
+const MARGIN = 30;
+
+const PLAYER1_COLOR = '#dc3232';
+const PLAYER2_COLOR = '#3232dc';
+const BOARD_COLOR = '#f5deb3';
+const HIGHLIGHT_COLOR = '#ffff00';
+const SELECTED_COLOR = '#00ff00';
+
+const STATE = {
+    MODE_SELECT: 'mode_select',
+    RULE_INTRO: 'rule_intro',
+    SELECTING: 'selecting',
+    MOVING: 'moving',
+    FLIPPING: 'flipping',
+    CHAIN_FLIPPING: 'chain_flipping',
+    GAME_OVER: 'game_over'
+};
+
+class Board {
+    constructor() {
+        this.grid = Array(GRID_SIZE).fill(null).map(() => Array(GRID_SIZE).fill(0));
+        this.initPieces();
+    }
+
+    initPieces() {
+        for (let x = 0; x < GRID_SIZE; x++) {
+            this.grid[0][x] = 1;
+            this.grid[1][x] = 1;
+            this.grid[5][x] = 2;
+            this.grid[6][x] = 2;
+        }
+    }
+
+    getPiece(pos) {
+        return this.grid[pos[1]][pos[0]];
+    }
+
+    setPiece(pos, player) {
+        this.grid[pos[1]][pos[0]] = player;
+    }
+
+    hasConnection(from, to) {
+        const [fx, fy] = from;
+        const [tx, ty] = to;
+        const dx = tx - fx;
+        const dy = ty - fy;
+
+        if (dx === 0 || dy === 0) return true;
+        if (Math.abs(dx) !== 1 || Math.abs(dy) !== 1) return false;
+
+        const gy = Math.min(fy, ty);
+        if (gy === 2 || gy === 3) return true;
+
+        if (gy % 2 === 1) {
+            return (fx === tx - 1 && fy === gy && ty === gy + 1) ||
+                   (fx === tx + 1 && fy === gy + 1 && ty === gy);
+        } else {
+            return (fx === tx + 1 && fy === gy && ty === gy + 1) ||
+                   (fx === tx - 1 && fy === gy + 1 && ty === gy);
+        }
+    }
+
+    getValidMoves(player, from = null) {
+        if (from === null) {
+            const positions = [];
+            for (let y = 0; y < GRID_SIZE; y++) {
+                for (let x = 0; x < GRID_SIZE; x++) {
+                    if (this.grid[y][x] === player) {
+                        positions.push([x, y]);
+                    }
+                }
+            }
+            return positions;
+        }
+
+        const [fx, fy] = from;
+        const valid = [];
+        const directions = [
+            [-1, -1], [0, -1], [1, -1],
+            [-1, 0], [1, 0],
+            [-1, 1], [0, 1], [1, 1]
+        ];
+
+        for (const [dx, dy] of directions) {
+            const tx = fx + dx;
+            const ty = fy + dy;
+            if (tx >= 0 && tx < GRID_SIZE && ty >= 0 && ty < GRID_SIZE) {
+                if (this.grid[ty][tx] === 0 && this.hasConnection(from, [tx, ty])) {
+                    valid.push([tx, ty]);
+                }
+            }
+        }
+        return valid;
+    }
+
+    movePiece(from, to) {
+        const player = this.grid[from[1]][from[0]];
+        this.grid[to[1]][to[0]] = player;
+        this.grid[from[1]][from[0]] = 0;
+    }
+
+    copy() {
+        const newBoard = new Board();
+        newBoard.grid = this.grid.map(row => [...row]);
+        return newBoard;
+    }
+
+    countPieces(player) {
+        let count = 0;
+        for (let y = 0; y < GRID_SIZE; y++) {
+            for (let x = 0; x < GRID_SIZE; x++) {
+                if (this.grid[y][x] === player) count++;
+            }
+        }
+        return count;
+    }
+
+    hasAnyMove(player) {
+        const fromPositions = this.getValidMoves(player);
+        for (const from of fromPositions) {
+            const toPositions = this.getValidMoves(player, from);
+            if (toPositions.length > 0) return true;
+        }
+        return false;
+    }
+
+    static evaluatePosition(pos) {
+        const [x, y] = pos;
+        const centerX = GRID_SIZE / 2 - 0.5;
+        const centerY = GRID_SIZE / 2 - 0.5;
+        const distance = Math.sqrt((x - centerX) ** 2 + (y - centerY) ** 2);
+        const maxDistance = Math.sqrt((GRID_SIZE / 2) ** 2 + (GRID_SIZE / 2) ** 2);
+        return (maxDistance - distance) / maxDistance;
+    }
+}
+
+class FlipRule {
+    constructor(board) {
+        this.board = board;
+    }
+
+    getFlipsAfterMove(player, pos) {
+        const groups = this.getFlipGroupsAfterMove(player, pos);
+        const flips = [];
+        for (const group of groups) {
+            flips.push(...group.flips);
+        }
+        return flips;
+    }
+
+    getFlipGroupsAfterMove(player, pos) {
+        const groups = [];
+        const opponent = 3 - player;
+        const [nx, ny] = pos;
+        const directions = [[-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1]];
+
+        for (const [dx, dy] of directions) {
+            const ax1 = nx + dx;
+            const ay1 = ny + dy;
+            const ax2 = nx + dx * 2;
+            const ay2 = ny + dy * 2;
+            if (ax1 >= 0 && ax1 < GRID_SIZE && ay1 >= 0 && ay1 < GRID_SIZE &&
+                ax2 >= 0 && ax2 < GRID_SIZE && ay2 >= 0 && ay2 < GRID_SIZE) {
+                if (this.board.getPiece([ax1, ay1]) === opponent && this.board.getPiece([ax2, ay2]) === player) {
+                    groups.push({ type: 'a', dir: [dx, dy], flips: [[[ax1, ay1], '规则A']] });
+                }
+            }
+
+            const bx1 = nx - dx;
+            const by1 = ny - dy;
+            const bx2 = nx + dx;
+            const by2 = ny + dy;
+            if (bx1 >= 0 && bx1 < GRID_SIZE && by1 >= 0 && by1 < GRID_SIZE &&
+                bx2 >= 0 && bx2 < GRID_SIZE && by2 >= 0 && by2 < GRID_SIZE) {
+                if (this.board.getPiece([bx1, by1]) === opponent && this.board.getPiece([bx2, by2]) === opponent) {
+                    groups.push({ type: 'b', dir: [dx, dy], flips: [[[bx1, by1], '规则B左'], [[bx2, by2], '规则B右']] });
+                }
+            }
+        }
+        return groups;
+    }
+
+    getTriggers(player) {
+        const triggers = [];
+        for (let y = 0; y < GRID_SIZE; y++) {
+            for (let x = 0; x < GRID_SIZE; x++) {
+                if (this.board.getPiece([x, y]) === player) {
+                    if (this.getFlipsForTrigger(player, [x, y]).length > 0) {
+                        triggers.push([x, y]);
+                    }
+                }
+            }
+        }
+        return triggers;
+    }
+
+    getFlipsForTrigger(player, pos) {
+        const groups = this.getFlipGroupsForTrigger(player, pos);
+        const flips = [];
+        for (const group of groups) {
+            flips.push(...group.flips);
+        }
+        return flips;
+    }
+
+    getFlipGroupsForTrigger(player, pos) {
+        const groups = [];
+        const opponent = 3 - player;
+        const [px, py] = pos;
+        const directions = [[-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1]];
+
+        for (const [dx, dy] of directions) {
+            const ax1 = px + dx;
+            const ay1 = py + dy;
+            const ax2 = px + dx * 2;
+            const ay2 = py + dy * 2;
+            if (ax1 >= 0 && ax1 < GRID_SIZE && ay1 >= 0 && ay1 < GRID_SIZE &&
+                ax2 >= 0 && ax2 < GRID_SIZE && ay2 >= 0 && ay2 < GRID_SIZE) {
+                if (this.board.getPiece([ax1, ay1]) === opponent && this.board.getPiece([ax2, ay2]) === player) {
+                    groups.push({ type: 'a', dir: [dx, dy], flips: [[[ax1, ay1], '连锁A']] });
+                }
+            }
+
+            const bx1 = px - dx;
+            const by1 = py - dy;
+            const bx2 = px + dx;
+            const by2 = py + dy;
+            if (bx1 >= 0 && bx1 < GRID_SIZE && by1 >= 0 && by1 < GRID_SIZE &&
+                bx2 >= 0 && bx2 < GRID_SIZE && by2 >= 0 && by2 < GRID_SIZE) {
+                if (this.board.getPiece([bx1, by1]) === opponent && this.board.getPiece([bx2, by2]) === opponent) {
+                    groups.push({ type: 'b', dir: [dx, dy], flips: [[[bx1, by1], '连锁B左'], [[bx2, by2], '连锁B右']] });
+                }
+            }
+        }
+        return groups;
+    }
+}
+
+class ChainFlipHandler {
+    constructor(board, flipRule) {
+        this.board = board;
+        this.flipRule = flipRule;
+        this.player = 0;
+        this.availableTriggers = [];
+        this.selectedTrigger = null;
+        this.previewFlips = [];
+        this.availableGroups = [];
+        this.selectedGroup = null;
+    }
+
+    startChainFlip(player) {
+        this.player = player;
+        this.availableTriggers = this.flipRule.getTriggers(player);
+        this.selectedTrigger = null;
+        this.previewFlips = [];
+        this.availableGroups = [];
+        this.selectedGroup = null;
+        return this.availableTriggers.length > 0;
+    }
+
+    getTriggers() {
+        return this.availableTriggers;
+    }
+
+    getPreviewFlips() {
+        return this.previewFlips;
+    }
+
+    getAvailableGroups() {
+        return this.availableGroups;
+    }
+
+    getSelectedGroup() {
+        return this.selectedGroup;
+    }
+
+    selectTrigger(pos) {
+        const index = this.availableTriggers.findIndex(t => t[0] === pos[0] && t[1] === pos[1]);
+        if (index === -1) return;
+
+        this.selectedTrigger = pos;
+        this.availableGroups = this.flipRule.getFlipGroupsForTrigger(this.player, pos);
+        this.selectedGroup = null;
+        if (this.availableGroups.length > 0) {
+            this.previewFlips = this.availableGroups[0].flips.map(f => f[0]);
+        } else {
+            this.previewFlips = [];
+        }
+    }
+
+    selectGroup(pos) {
+        if (this.selectedTrigger === null) return;
+        for (let i = 0; i < this.availableGroups.length; i++) {
+            for (const [p, _] of this.availableGroups[i].flips) {
+                if (p[0] === pos[0] && p[1] === pos[1]) {
+                    this.selectedGroup = i;
+                    this.previewFlips = this.availableGroups[i].flips.map(f => f[0]);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+class SimpleAI {
+    constructor(playerNum, depth = 2) {
+        this.playerNum = playerNum;
+        this.opponent = 3 - playerNum;
+        this.depth = depth;
+    }
+
+    chooseMove(board) {
+        let bestScore = -Infinity;
+        let bestMove = null;
+        const fromPositions = board.getValidMoves(this.playerNum);
+
+        for (const from of fromPositions) {
+            const toPositions = board.getValidMoves(this.playerNum, from);
+            for (const to of toPositions) {
+                const score = this.simulateMove(board, from, to);
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestMove = [from, to];
+                }
+            }
+        }
+        return bestMove;
+    }
+
+    simulateMove(board, from, to) {
+        const simBoard = board.copy();
+        simBoard.movePiece(from, to);
+        const flipRule = new FlipRule(simBoard);
+        const flipGroups = flipRule.getFlipGroupsAfterMove(this.playerNum, to);
+        if (flipGroups.length > 0) {
+            let maxFlips = 0;
+            let bestGroup = flipGroups[0];
+            for (const group of flipGroups) {
+                if (group.flips.length > maxFlips || (group.flips.length === maxFlips && group.type === 'b')) {
+                    maxFlips = group.flips.length;
+                    bestGroup = group;
+                }
+            }
+            for (const [pos, _] of bestGroup.flips) {
+                simBoard.setPiece(pos, this.playerNum);
+            }
+        }
+        return this.evaluateBoard(simBoard);
+    }
+
+    evaluateBoard(board) {
+        let score = 0;
+        const myCount = board.countPieces(this.playerNum);
+        const oppCount = board.countPieces(this.opponent);
+        score += (myCount - oppCount) * 100;
+
+        for (let y = 0; y < GRID_SIZE; y++) {
+            for (let x = 0; x < GRID_SIZE; x++) {
+                const piece = board.getPiece([x, y]);
+                if (piece === this.playerNum) {
+                    score += Board.evaluatePosition([x, y]) * 10;
+                } else if (piece === this.opponent) {
+                    score -= Board.evaluatePosition([x, y]) * 10;
+                }
+            }
+        }
+
+        return score;
+    }
+
+    chooseFlipGroup(groups) {
+        let bestIdx = 0;
+        let bestScore = -1;
+        for (let i = 0; i < groups.length; i++) {
+            let score = groups[i].flips.length * 10;
+            if (groups[i].type === 'b') score += 5;
+            if (score > bestScore) {
+                bestScore = score;
+                bestIdx = i;
+            }
+        }
+        return bestIdx;
+    }
+
+    chooseChainTrigger(chainHandler) {
+        const triggers = chainHandler.getTriggers();
+        if (triggers.length === 0) return [null, null];
+
+        let bestScore = -1;
+        let bestTrigger = null;
+        let bestGroupIdx = 0;
+
+        for (const trigger of triggers) {
+            chainHandler.selectTrigger(trigger);
+            const groups = chainHandler.getAvailableGroups();
+            if (groups.length === 0) continue;
+            const groupIdx = this.chooseFlipGroup(groups);
+            let score = groups[groupIdx].flips.length * 10;
+            if (groups[groupIdx].type === 'b') score += 5;
+            if (score > bestScore) {
+                bestScore = score;
+                bestTrigger = trigger;
+                bestGroupIdx = groupIdx;
+            }
+        }
+        return [bestTrigger, bestGroupIdx];
+    }
+}
+
+class Game {
+    constructor() {
+        this.canvas = document.getElementById('board');
+        this.ctx = this.canvas.getContext('2d');
+        this.resizeCanvas();
+
+        this.board = new Board();
+        this.flipRule = new FlipRule(this.board);
+        this.chainHandler = new ChainFlipHandler(this.board, this.flipRule);
+
+        this.currentPlayer = 1;
+        this.state = STATE.MODE_SELECT;
+        this.selectedPos = null;
+        this.pendingFlipGroups = [];
+        this.selectedFlipGroup = null;
+        this.gameMode = null;
+        this.ai = null;
+        this.aiActionTimer = 0;
+
+        this.rulePage = 0;
+
+        this.bindEvents();
+        this.render();
+    }
+
+    resizeCanvas() {
+        const maxSize = Math.min(window.innerWidth - 40, 400);
+        const canvasSize = maxSize;
+        this.canvas.width = canvasSize;
+        this.canvas.height = canvasSize;
+        this.cellSize = (canvasSize - MARGIN * 2) / (GRID_SIZE - 1);
+        this.margin = MARGIN * (canvasSize / 400);
+    }
+
+    posToScreen(pos) {
+        return [this.margin + pos[0] * this.cellSize, this.margin + pos[1] * this.cellSize];
+    }
+
+    screenToPos(screenPos) {
+        const rect = this.canvas.getBoundingClientRect();
+        const sx = screenPos[0] - rect.left;
+        const sy = screenPos[1] - rect.top;
+        const x = Math.round((sx - this.margin) / this.cellSize);
+        const y = Math.round((sy - this.margin) / this.cellSize);
+        if (x >= 0 && x < GRID_SIZE && y >= 0 && y < GRID_SIZE) {
+            const [tx, ty] = this.posToScreen([x, y]);
+            const dx = Math.abs(sx - tx);
+            const dy = Math.abs(sy - ty);
+            const threshold = Math.max(20, this.cellSize * 0.4);
+            if (dx < threshold && dy < threshold) {
+                return [x, y];
+            }
+        }
+        return null;
+    }
+
+    bindEvents() {
+        this.canvas.addEventListener('click', (e) => this.handleClick([e.clientX, e.clientY]));
+        this.canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            const touch = e.touches[0];
+            this.handleClick([touch.clientX, touch.clientY]);
+        }, { passive: false });
+
+        document.getElementById('btn-pvp').addEventListener('click', () => this.startGame('pvp'));
+        document.getElementById('btn-pve').addEventListener('click', () => this.startGame('pve'));
+        document.getElementById('btn-rules').addEventListener('click', () => this.showRules());
+        document.getElementById('btn-back').addEventListener('click', () => this.backToMenu());
+        document.getElementById('btn-confirm').addEventListener('click', () => this.confirmAction());
+        document.getElementById('btn-skip').addEventListener('click', () => this.skipAction());
+        document.getElementById('btn-restart').addEventListener('click', () => this.restart());
+
+        document.getElementById('btn-prev').addEventListener('click', () => this.prevRulePage());
+        document.getElementById('btn-next').addEventListener('click', () => this.nextRulePage());
+        document.getElementById('btn-back-rules').addEventListener('click', () => this.backToMenuFromRules());
+
+        window.addEventListener('resize', () => {
+            this.resizeCanvas();
+            this.render();
+        });
+    }
+
+    startGame(mode) {
+        this.board = new Board();
+        this.flipRule = new FlipRule(this.board);
+        this.chainHandler = new ChainFlipHandler(this.board, this.flipRule);
+        this.currentPlayer = 1;
+        this.state = STATE.SELECTING;
+        this.selectedPos = null;
+        this.pendingFlipGroups = [];
+        this.selectedFlipGroup = null;
+        this.gameMode = mode;
+        if (mode === 'pve') {
+            this.ai = new SimpleAI(2);
+        }
+
+        document.getElementById('mode-select').style.display = 'none';
+        document.getElementById('game-area').style.display = 'flex';
+        this.render();
+    }
+
+    showRules() {
+        document.getElementById('mode-select').style.display = 'none';
+        document.getElementById('rule-intro').style.display = 'flex';
+        this.rulePage = 0;
+        this.updateRulePage();
+    }
+
+    backToMenu() {
+        this.state = STATE.MODE_SELECT;
+        document.getElementById('game-area').style.display = 'none';
+        document.getElementById('mode-select').style.display = 'flex';
+    }
+
+    backToMenuFromRules() {
+        document.getElementById('rule-intro').style.display = 'none';
+        document.getElementById('mode-select').style.display = 'flex';
+    }
+
+    prevRulePage() {
+        if (this.rulePage > 0) {
+            this.rulePage--;
+            this.updateRulePage();
+        }
+    }
+
+    nextRulePage() {
+        if (this.rulePage < 4) {
+            this.rulePage++;
+            this.updateRulePage();
+        }
+    }
+
+    updateRulePage() {
+        document.querySelectorAll('.rule-page').forEach(p => p.classList.remove('active'));
+        document.querySelector(`.rule-page[data-page="${this.rulePage}"]`).classList.add('active');
+        document.getElementById('page-indicator').textContent = `${this.rulePage + 1}/5`;
+
+        document.getElementById('btn-prev').style.display = this.rulePage === 0 ? 'none' : 'inline-block';
+        document.getElementById('btn-next').style.display = this.rulePage === 4 ? 'none' : 'inline-block';
+        document.getElementById('btn-back-rules').style.display = this.rulePage === 4 ? 'inline-block' : 'none';
+    }
+
+    handleClick(pos) {
+        if (this.state === STATE.MODE_SELECT || this.state === STATE.RULE_INTRO) return;
+
+        const bPos = this.screenToPos(pos);
+
+        if (this.state === STATE.GAME_OVER) {
+            this.restart();
+            return;
+        }
+
+        if (this.state === STATE.SELECTING) {
+            if (bPos && this.board.getPiece(bPos) === this.currentPlayer) {
+                this.selectedPos = bPos;
+                this.state = STATE.MOVING;
+            }
+        } else if (this.state === STATE.MOVING) {
+            if (bPos && this.board.getValidMoves(this.currentPlayer, this.selectedPos).some(p => p[0] === bPos[0] && p[1] === bPos[1])) {
+                this.doMove(this.selectedPos, bPos);
+            } else if (bPos && this.board.getPiece(bPos) === this.currentPlayer) {
+                this.selectedPos = bPos;
+            } else {
+                this.state = STATE.SELECTING;
+                this.selectedPos = null;
+            }
+        } else if (this.state === STATE.FLIPPING) {
+            if (bPos) {
+                for (let i = 0; i < this.pendingFlipGroups.length; i++) {
+                    for (const [p, _] of this.pendingFlipGroups[i].flips) {
+                        if (p[0] === bPos[0] && p[1] === bPos[1]) {
+                            this.selectedFlipGroup = i;
+                            break;
+                        }
+                    }
+                }
+            }
+        } else if (this.state === STATE.CHAIN_FLIPPING) {
+            if (bPos) {
+                if (this.chainHandler.selectedTrigger !== null) {
+                    this.chainHandler.selectGroup(bPos);
+                }
+                if (this.chainHandler.selectedTrigger === null ||
+                    this.chainHandler.getTriggers().some(t => t[0] === bPos[0] && t[1] === bPos[1])) {
+                    this.chainHandler.selectTrigger(bPos);
+                }
+            }
+        }
+        this.render();
+    }
+
+    doMove(from, to) {
+        this.board.movePiece(from, to);
+        this.pendingFlipGroups = this.flipRule.getFlipGroupsAfterMove(this.currentPlayer, to);
+        this.selectedFlipGroup = null;
+        this.selectedPos = to;
+
+        if (this.pendingFlipGroups.length > 0) {
+            this.state = STATE.FLIPPING;
+        } else {
+            this.endTurn();
+        }
+        this.render();
+    }
+
+    confirmAction() {
+        if (this.state === STATE.FLIPPING && this.selectedFlipGroup !== null) {
+            const group = this.pendingFlipGroups[this.selectedFlipGroup];
+            for (const [pos, _] of group.flips) {
+                this.board.setPiece(pos, this.currentPlayer);
+            }
+            if (this.chainHandler.startChainFlip(this.currentPlayer)) {
+                this.state = STATE.CHAIN_FLIPPING;
+            } else {
+                this.endTurn();
+            }
+        } else if (this.state === STATE.CHAIN_FLIPPING && this.chainHandler.selectedTrigger !== null && this.chainHandler.selectedGroup !== null) {
+            const groups = this.chainHandler.availableGroups;
+            const group = groups[this.chainHandler.selectedGroup];
+            for (const [pos, _] of group.flips) {
+                this.board.setPiece(pos, this.currentPlayer);
+            }
+
+            const remainingGroups = this.flipRule.getFlipGroupsForTrigger(this.currentPlayer, this.chainHandler.selectedTrigger);
+            if (remainingGroups.length > 0) {
+                this.chainHandler.availableGroups = remainingGroups;
+                this.chainHandler.selectedGroup = null;
+                this.chainHandler.previewFlips = remainingGroups[0].flips.map(f => f[0]);
+            } else {
+                this.chainHandler.selectedTrigger = null;
+                this.chainHandler.availableGroups = [];
+                this.chainHandler.selectedGroup = null;
+                this.chainHandler.previewFlips = [];
+                this.chainHandler.availableTriggers = this.flipRule.getTriggers(this.currentPlayer);
+                if (this.chainHandler.availableTriggers.length === 0) {
+                    this.endTurn();
+                }
+            }
+        }
+        this.render();
+    }
+
+    skipAction() {
+        if (this.state === STATE.FLIPPING || this.state === STATE.CHAIN_FLIPPING) {
+            this.endTurn();
+            this.render();
+        }
+    }
+
+    endTurn() {
+        const p1Count = this.board.countPieces(1);
+        const p2Count = this.board.countPieces(2);
+
+        if (p1Count === 0 || p2Count === 0) {
+            this.state = STATE.GAME_OVER;
+            return;
+        }
+
+        this.currentPlayer = 3 - this.currentPlayer;
+        if (!this.board.hasAnyMove(this.currentPlayer)) {
+            this.state = STATE.GAME_OVER;
+            return;
+        }
+
+        this.state = STATE.SELECTING;
+        this.selectedPos = null;
+
+        if (this.gameMode === 'pve' && this.currentPlayer === 2) {
+            setTimeout(() => this.doAIMove(), 600);
+        }
+    }
+
+    doAIMove() {
+        if (this.state !== STATE.SELECTING || this.currentPlayer !== 2) return;
+
+        const [from, to] = this.ai.chooseMove(this.board);
+        if (!from || !to) return;
+
+        this.selectedPos = from;
+        this.state = STATE.MOVING;
+        this.render();
+
+        setTimeout(() => {
+            this.doMove(from, to);
+            if (this.state === STATE.FLIPPING) {
+                setTimeout(() => this.doAIFlip(), 400);
+            }
+        }, 400);
+    }
+
+    doAIFlip() {
+        if (this.state !== STATE.FLIPPING) return;
+
+        const groupIdx = this.ai.chooseFlipGroup(this.pendingFlipGroups);
+        this.selectedFlipGroup = groupIdx;
+        this.confirmAction();
+
+        if (this.state === STATE.CHAIN_FLIPPING) {
+            setTimeout(() => this.doAIChain(), 400);
+        }
+    }
+
+    doAIChain() {
+        if (this.state !== STATE.CHAIN_FLIPPING) return;
+
+        const [trigger, groupIdx] = this.ai.chooseChainTrigger(this.chainHandler);
+        if (trigger === null) {
+            this.skipAction();
+            return;
+        }
+
+        this.chainHandler.selectTrigger(trigger);
+        this.chainHandler.selectedGroup = groupIdx;
+        this.confirmAction();
+
+        if (this.state === STATE.CHAIN_FLIPPING) {
+            setTimeout(() => this.doAIChain(), 400);
+        }
+    }
+
+    restart() {
+        this.board = new Board();
+        this.flipRule = new FlipRule(this.board);
+        this.chainHandler = new ChainFlipHandler(this.board, this.flipRule);
+        this.currentPlayer = 1;
+        this.state = STATE.SELECTING;
+        this.selectedPos = null;
+        this.pendingFlipGroups = [];
+        this.selectedFlipGroup = null;
+        this.render();
+    }
+
+    render() {
+        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+
+        this.drawBoard();
+        this.drawPieces();
+        this.drawHighlight();
+        this.updateUI();
+    }
+
+    drawBoard() {
+        const ctx = this.ctx;
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 2;
+
+        for (let y = 0; y < GRID_SIZE; y++) {
+            const [sx, sy] = this.posToScreen([0, y]);
+            const [ex, ey] = this.posToScreen([GRID_SIZE - 1, y]);
+            ctx.beginPath();
+            ctx.moveTo(sx, sy);
+            ctx.lineTo(ex, ey);
+            ctx.stroke();
+        }
+
+        for (let x = 0; x < GRID_SIZE; x++) {
+            const [sx, sy] = this.posToScreen([x, 0]);
+            const [ex, ey] = this.posToScreen([x, GRID_SIZE - 1]);
+            ctx.beginPath();
+            ctx.moveTo(sx, sy);
+            ctx.lineTo(ex, ey);
+            ctx.stroke();
+        }
+
+        ctx.lineWidth = 1;
+        for (let gy = 0; gy < GRID_SIZE - 1; gy++) {
+            for (let gx = 0; gx < GRID_SIZE - 1; gx++) {
+                if (gy === 2 || gy === 3) {
+                    let [sx, sy] = this.posToScreen([gx, gy]);
+                    let [ex, ey] = this.posToScreen([gx + 1, gy + 1]);
+                    ctx.beginPath();
+                    ctx.moveTo(sx, sy);
+                    ctx.lineTo(ex, ey);
+                    ctx.stroke();
+
+                    [sx, sy] = this.posToScreen([gx + 1, gy]);
+                    [ex, ey] = this.posToScreen([gx, gy + 1]);
+                    ctx.beginPath();
+                    ctx.moveTo(sx, sy);
+                    ctx.lineTo(ex, ey);
+                    ctx.stroke();
+                } else {
+                    let sx, sy, ex, ey;
+                    if (gy % 2 === 1) {
+                        [sx, sy] = this.posToScreen([gx, gy]);
+                        [ex, ey] = this.posToScreen([gx + 1, gy + 1]);
+                    } else {
+                        [sx, sy] = this.posToScreen([gx + 1, gy]);
+                        [ex, ey] = this.posToScreen([gx, gy + 1]);
+                    }
+                    ctx.beginPath();
+                    ctx.moveTo(sx, sy);
+                    ctx.lineTo(ex, ey);
+                    ctx.stroke();
+                }
+            }
+        }
+    }
+
+    drawPieces() {
+        const ctx = this.ctx;
+        for (let y = 0; y < GRID_SIZE; y++) {
+            for (let x = 0; x < GRID_SIZE; x++) {
+                const p = this.board.getPiece([x, y]);
+                if (p !== 0) {
+                    const color = p === 1 ? PLAYER1_COLOR : PLAYER2_COLOR;
+                    const [cx, cy] = this.posToScreen([x, y]);
+                    ctx.beginPath();
+                    ctx.arc(cx, cy, Math.max(12, this.cellSize * 0.3), 0, Math.PI * 2);
+                    ctx.fillStyle = color;
+                    ctx.fill();
+                    ctx.strokeStyle = '#000';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                }
+            }
+        }
+    }
+
+    drawHighlight() {
+        const ctx = this.ctx;
+
+        if (this.selectedPos) {
+            const [cx, cy] = this.posToScreen(this.selectedPos);
+            ctx.beginPath();
+            ctx.arc(cx, cy, Math.max(18, this.cellSize * 0.45), 0, Math.PI * 2);
+            ctx.strokeStyle = SELECTED_COLOR;
+            ctx.lineWidth = 4;
+            ctx.stroke();
+        }
+
+        if (this.state === STATE.MOVING) {
+            for (const pos of this.board.getValidMoves(this.currentPlayer, this.selectedPos)) {
+                const [cx, cy] = this.posToScreen(pos);
+                ctx.beginPath();
+                ctx.arc(cx, cy, Math.max(8, this.cellSize * 0.2), 0, Math.PI * 2);
+                ctx.strokeStyle = HIGHLIGHT_COLOR;
+                ctx.lineWidth = 3;
+                ctx.stroke();
+            }
+        }
+
+        if (this.state === STATE.FLIPPING) {
+            const colors = ['#00c8ff', '#ff00ff', '#00ff80', '#ff8000'];
+            for (let i = 0; i < this.pendingFlipGroups.length; i++) {
+                const col = colors[i % colors.length];
+                const w = this.selectedFlipGroup === i ? 6 : 3;
+                for (const [pos, _] of this.pendingFlipGroups[i].flips) {
+                    const [cx, cy] = this.posToScreen(pos);
+                    ctx.beginPath();
+                    ctx.arc(cx, cy, Math.max(18, this.cellSize * 0.45), 0, Math.PI * 2);
+                    ctx.strokeStyle = col;
+                    ctx.lineWidth = w;
+                    ctx.stroke();
+                }
+            }
+        }
+
+        if (this.state === STATE.CHAIN_FLIPPING) {
+            const triggers = this.chainHandler.getTriggers();
+            const selTrig = this.chainHandler.selectedTrigger;
+            const groups = this.chainHandler.getAvailableGroups();
+            const selIdx = this.chainHandler.getSelectedGroup();
+
+            for (const pos of triggers) {
+                const [cx, cy] = this.posToScreen(pos);
+                ctx.beginPath();
+                ctx.arc(cx, cy, Math.max(22, this.cellSize * 0.55), 0, Math.PI * 2);
+                ctx.fillStyle = '#fff';
+                ctx.fill();
+                const color = this.currentPlayer === 1 ? PLAYER1_COLOR : PLAYER2_COLOR;
+                ctx.beginPath();
+                ctx.arc(cx, cy, Math.max(12, this.cellSize * 0.3), 0, Math.PI * 2);
+                ctx.fillStyle = color;
+                ctx.fill();
+                ctx.strokeStyle = '#000';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+
+                ctx.beginPath();
+                ctx.arc(cx, cy, Math.max(22, this.cellSize * 0.55), 0, Math.PI * 2);
+                ctx.strokeStyle = HIGHLIGHT_COLOR;
+                ctx.lineWidth = 6;
+                ctx.stroke();
+            }
+
+            if (selTrig !== null && groups.length > 0) {
+                const colors = ['#00c8ff', '#ff00ff', '#00ff80', '#ff8000'];
+                for (let i = 0; i < groups.length; i++) {
+                    const col = colors[i % colors.length];
+                    const w = selIdx === i ? 6 : 3;
+                    for (const [pos, _] of groups[i].flips) {
+                        const [cx, cy] = this.posToScreen(pos);
+                        ctx.beginPath();
+                        ctx.arc(cx, cy, Math.max(18, this.cellSize * 0.45), 0, Math.PI * 2);
+                        ctx.strokeStyle = col;
+                        ctx.lineWidth = w;
+                        ctx.stroke();
+                    }
+                }
+            }
+        }
+    }
+
+    updateUI() {
+        const currentTurnEl = document.getElementById('current-turn');
+        const scoreEl = document.getElementById('score');
+        const messageEl = document.getElementById('message');
+        const btnConfirm = document.getElementById('btn-confirm');
+        const btnSkip = document.getElementById('btn-skip');
+        const btnRestart = document.getElementById('btn-restart');
+
+        if (this.state === STATE.GAME_OVER) {
+            const winner = this.board.countPieces(1) === 0 ? 2 : (this.board.countPieces(2) === 0 ? 1 : (this.currentPlayer === 1 ? 2 : 1));
+            currentTurnEl.textContent = '';
+            messageEl.textContent = `玩家${winner}获胜！`;
+            messageEl.className = winner === 1 ? 'red' : 'blue';
+            btnConfirm.style.display = 'none';
+            btnSkip.style.display = 'none';
+            btnRestart.style.display = 'inline-block';
+        } else {
+            let pName = `玩家${this.currentPlayer}`;
+            if (this.gameMode === 'pve' && this.currentPlayer === 2) pName = 'AI';
+
+            let msg = '';
+            if (this.state === STATE.SELECTING) msg = `${pName} - 选择棋子`;
+            else if (this.state === STATE.MOVING) msg = `${pName} - 移动`;
+            else if (this.state === STATE.FLIPPING) msg = `${pName} - 选择翻转`;
+            else if (this.state === STATE.CHAIN_FLIPPING) msg = `${pName} - 连锁翻转`;
+
+            currentTurnEl.textContent = msg;
+            currentTurnEl.className = this.currentPlayer === 1 ? 'red' : 'blue';
+
+            const p1Count = this.board.countPieces(1);
+            const p2Count = this.board.countPieces(2);
+            scoreEl.textContent = `红:${p1Count} 蓝:${p2Count}`;
+
+            messageEl.textContent = '';
+            messageEl.className = '';
+
+            if (this.state === STATE.FLIPPING || this.state === STATE.CHAIN_FLIPPING) {
+                btnConfirm.style.display = 'inline-block';
+                btnSkip.style.display = 'inline-block';
+            } else {
+                btnConfirm.style.display = 'none';
+                btnSkip.style.display = 'none';
+            }
+        }
+    }
+}
+
+const game = new Game();

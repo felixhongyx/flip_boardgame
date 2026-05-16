@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip install *)",
+      "Bash(python game.py)",
+      "Bash(pyinstaller --onefile --windowed --name \"翻转棋\" game.py)"
+    ]
+  }
+}

@@ -1,11 +1,11 @@
-
 import pygame
 import sys
 from datetime import datetime
-from typing import List, Tuple, Optional, Set
+from typing import List, Tuple, Optional
+from board import GRID_SIZE, Board, FlipRule, ChainFlipHandler
+from ai_player import AIPlayer
 
 # 常量定义
-GRID_SIZE = 7  # 7x7交叉点 = 6x6棋盘
 CELL_SIZE = 80
 MARGIN = 60
 WINDOW_WIDTH = MARGIN * 2 + CELL_SIZE * (GRID_SIZE - 1)
@@ -19,6 +19,8 @@ PLAYER2_COLOR = (50, 50, 220)  # 蓝色
 BOARD_COLOR = (245, 222, 179)
 HIGHLIGHT_COLOR = (255, 255, 0)
 SELECTED_COLOR = (0, 255, 0)
+BUTTON_COLOR = (100, 200, 100)
+BUTTON_HOVER = (120, 220, 120)
 
 
 class GameLogger:
@@ -27,12 +29,10 @@ class GameLogger:
     def __init__(self, log_file: str = "game_log.txt"):
         self.log_file = log_file
         self.turn_count = 0
-        # 清空日志文件
         with open(self.log_file, "w", encoding="utf-8") as f:
             f.write(f"=== 游戏开始 - {datetime.now()} ===\n\n")
 
     def log(self, message: str):
-        """记录日志"""
         timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
         log_line = f"[{timestamp}] {message}\n"
         print(log_line, end="")
@@ -56,337 +56,12 @@ class GameLogger:
         self.log(f"玩家{player} 选择连锁翻转: {choice}")
 
     def log_game_over(self, winner: int):
-        self.log(f"\n=== 游戏结束 - 玩家{winner} 获胜! ===")
+        self.log(f"\n=== 游戏结束 - 玩家{winner}获胜! ===\n")
 
     def log_board_state(self, board: List[List[int]]):
-        """记录棋盘状态"""
         self.log("棋盘状态:")
         for row in board:
             self.log("  " + " ".join(str(c) if c != 0 else "." for c in row))
-
-
-class Board:
-    """棋盘类"""
-
-    def __init__(self):
-        # 初始化空棋盘: 0=空, 1=玩家1, 2=玩家2
-        self.grid = [[0 for _ in range(GRID_SIZE)] for _ in range(GRID_SIZE)]
-        self._init_pieces()
-
-    def _init_pieces(self):
-        """初始化棋子位置"""
-        # 玩家1在顶部两行 (y=0, y=1)
-        for x in range(GRID_SIZE):
-            self.grid[0][x] = 1
-            self.grid[1][x] = 1
-        # 玩家2在底部两行 (y=5, y=6)
-        for x in range(GRID_SIZE):
-            self.grid[5][x] = 2
-            self.grid[6][x] = 2
-
-    def get_piece(self, pos: Tuple[int, int]) -> int:
-        x, y = pos
-        return self.grid[y][x]
-
-    def set_piece(self, pos: Tuple[int, int], player: int):
-        x, y = pos
-        self.grid[y][x] = player
-
-    def has_connection(self, from_pos: Tuple[int, int], to_pos: Tuple[int, int]) -> bool:
-        """检查两点之间是否有连线（根据棋盘设计）"""
-        fx, fy = from_pos
-        tx, ty = to_pos
-
-        dx = tx - fx
-        dy = ty - fy
-
-        # 横竖移动始终允许
-        if dx == 0 or dy == 0:
-            return True
-
-        # 只能走一格斜
-        if abs(dx) != 1 or abs(dy) != 1:
-            return False
-
-        # 确定这两个点属于哪个格子的斜线
-        # gy是斜线所在的行（看绘制代码，y循环是斜线的行）
-        gy = min(fy, ty)
-
-        # 检查是否有对应斜线（与draw_board一致）
-        if gy % 2 == 1:
-            # 奇数行: 右下斜 \ (连接 (x, gy) 和 (x+1, gy+1))
-            return (fx == tx - 1 and fy == gy and ty == gy + 1) or \
-                   (fx == tx + 1 and fy == gy + 1 and ty == gy)
-        else:
-            # 偶数行: 右上斜 / (连接 (x+1, gy) 和 (x, gy+1))
-            return (fx == tx + 1 and fy == gy and ty == gy + 1) or \
-                   (fx == tx - 1 and fy == gy + 1 and ty == gy)
-
-    def get_valid_moves(self, player: int, from_pos: Optional[Tuple[int, int]] = None) -> List[Tuple[int, int]]:
-        """获取合法移动"""
-        if from_pos is None:
-            # 返回所有己方棋子位置
-            return [(x, y) for y in range(GRID_SIZE) for x in range(GRID_SIZE) if self.grid[y][x] == player]
-
-        fx, fy = from_pos
-        valid = []
-
-        # 检查8个方向
-        directions = [(-1, -1), (0, -1), (1, -1),
-                      (-1, 0), (1, 0),
-                      (-1, 1), (0, 1), (1, 1)]
-
-        for dx, dy in directions:
-            tx, ty = fx + dx, fy + dy
-            # 检查是否在棋盘范围内
-            if 0 <= tx < GRID_SIZE and 0 <= ty < GRID_SIZE:
-                # 检查终点是否为空
-                if self.grid[ty][tx] == 0:
-                    # 检查是否有连线
-                    if self.has_connection(from_pos, (tx, ty)):
-                        valid.append((tx, ty))
-
-        return valid
-
-    def move_piece(self, from_pos: Tuple[int, int], to_pos: Tuple[int, int]) -> bool:
-        """移动棋子，返回是否成功"""
-        fx, fy = from_pos
-        tx, ty = to_pos
-
-        player = self.grid[fy][fx]
-        if player == 0:
-            return False
-        if self.grid[ty][tx] != 0:
-            return False
-
-        self.grid[ty][tx] = player
-        self.grid[fy][fx] = 0
-        return True
-
-    def copy(self) -> 'Board':
-        """复制棋盘"""
-        new_board = Board()
-        new_board.grid = [row[:] for row in self.grid]
-        return new_board
-
-    def count_pieces(self, player: int) -> int:
-        """统计棋子数量"""
-        return sum(row.count(player) for row in self.grid)
-
-
-class FlipRule:
-    """翻转规则"""
-
-    def __init__(self, board: Board):
-        self.board = board
-
-    def get_flips_after_move(self, player: int, new_pos: Tuple[int, int]) -> List[Tuple[Tuple[int, int], str]]:
-        """获取走棋后可以翻转的棋子列表，返回 (位置, 原因)"""
-        groups = self.get_flip_groups_after_move(player, new_pos)
-        result = []
-        for g in groups:
-            result.extend(g["flips"])
-        return result
-
-    def get_flip_groups_after_move(self, player: int, new_pos: Tuple[int, int]) -> List[dict]:
-        """获取走棋后可以翻转的棋子分组，返回 [{"type": "a"/"b", "dir": (dx, dy), "flips": [(pos, reason), ...]}]"""
-        groups = []
-        opponent = 3 - player
-
-        # 8个方向
-        directions = [(-1, -1), (0, -1), (1, -1),
-                      (-1, 0), (1, 0),
-                      (-1, 1), (0, 1), (1, 1)]
-
-        nx, ny = new_pos
-
-        for dx, dy in directions:
-            # 规则a: 己方-敌方-己方 (新位置是第二个己方)
-            ax1, ay1 = nx + dx, ny + dy
-            ax2, ay2 = nx + dx * 2, ny + dy * 2
-            if (0 <= ax1 < GRID_SIZE and 0 <= ay1 < GRID_SIZE and
-                    0 <= ax2 < GRID_SIZE and 0 <= ay2 < GRID_SIZE):
-                if (self.board.get_piece((ax1, ay1)) == opponent and
-                        self.board.get_piece((ax2, ay2)) == player):
-                    groups.append({
-                        "type": "a",
-                        "dir": (dx, dy),
-                        "flips": [((ax1, ay1), f"规则a: 方向({dx},{dy}) 己方-敌方-己方")]
-                    })
-
-            # 规则b: 敌方-己方-敌方 (新位置是中间的己方)
-            bx1, by1 = nx - dx, ny - dy
-            bx2, by2 = nx + dx, ny + dy
-            if (0 <= bx1 < GRID_SIZE and 0 <= by1 < GRID_SIZE and
-                    0 <= bx2 < GRID_SIZE and 0 <= by2 < GRID_SIZE):
-                if (self.board.get_piece((bx1, by1)) == opponent and
-                        self.board.get_piece((bx2, by2)) == opponent):
-                    groups.append({
-                        "type": "b",
-                        "dir": (dx, dy),
-                        "flips": [
-                            ((bx1, by1), f"规则b: 方向({dx},{dy}) 敌方-己方-敌方 (左)"),
-                            ((bx2, by2), f"规则b: 方向({dx},{dy}) 敌方-己方-敌方 (右)")
-                        ]
-                    })
-
-        return groups
-
-    def get_triggers(self, player: int) -> List[Tuple[int, int]]:
-        """获取可以触发连锁翻转的己方棋子位置"""
-        triggers = []
-        for y in range(GRID_SIZE):
-            for x in range(GRID_SIZE):
-                if self.board.get_piece((x, y)) == player:
-                    if self._get_flips_for_trigger(player, (x, y)):
-                        triggers.append((x, y))
-        return triggers
-
-    def get_flips_for_trigger(self, player: int, trigger_pos: Tuple[int, int]) -> List[Tuple[Tuple[int, int], str]]:
-        """获取选中触发点后应该翻转的棋子"""
-        return self._get_flips_for_trigger(player, trigger_pos)
-
-    def get_flip_groups_for_trigger(self, player: int, pos: Tuple[int, int]) -> List[dict]:
-        """获取单个触发点能翻转的分组"""
-        groups = []
-        opponent = 3 - player
-        px, py = pos
-
-        directions = [(-1, -1), (0, -1), (1, -1),
-                      (-1, 0), (1, 0),
-                      (-1, 1), (0, 1), (1, 1)]
-
-        for dx, dy in directions:
-            # 规则a: 己方-敌方-己方 (当前位置是第一个己方)
-            ax1, ay1 = px + dx, py + dy
-            ax2, ay2 = px + dx * 2, py + dy * 2
-            if (0 <= ax1 < GRID_SIZE and 0 <= ay1 < GRID_SIZE and
-                    0 <= ax2 < GRID_SIZE and 0 <= ay2 < GRID_SIZE):
-                if (self.board.get_piece((ax1, ay1)) == opponent and
-                        self.board.get_piece((ax2, ay2)) == player):
-                    groups.append({
-                        "type": "a",
-                        "dir": (dx, dy),
-                        "flips": [((ax1, ay1), f"连锁-规则a 触发点({px},{py})")]
-                    })
-
-            # 规则b: 敌方-己方-敌方 (当前位置是中间的己方)
-            bx1, by1 = px - dx, py - dy
-            bx2, by2 = px + dx, py + dy
-            if (0 <= bx1 < GRID_SIZE and 0 <= by1 < GRID_SIZE and
-                    0 <= bx2 < GRID_SIZE and 0 <= by2 < GRID_SIZE):
-                if (self.board.get_piece((bx1, by1)) == opponent and
-                        self.board.get_piece((bx2, by2)) == opponent):
-                    groups.append({
-                        "type": "b",
-                        "dir": (dx, dy),
-                        "flips": [
-                            ((bx1, by1), f"连锁-规则b 触发点({px},{py})"),
-                            ((bx2, by2), f"连锁-规则b 触发点({px},{py})")
-                        ]
-                    })
-
-        return groups
-
-    def _get_flips_for_trigger(self, player: int, pos: Tuple[int, int]) -> List[Tuple[Tuple[int, int], str]]:
-        """获取单个触发点能翻转的所有棋子"""
-        groups = self.get_flip_groups_for_trigger(player, pos)
-        result = []
-        for g in groups:
-            result.extend(g["flips"])
-        return result
-
-
-class ChainFlipHandler:
-    """连锁翻转处理器"""
-
-    def __init__(self, board: Board, flip_rule: FlipRule, logger: GameLogger):
-        self.board = board
-        self.flip_rule = flip_rule
-        self.logger = logger
-        self.player = 0
-        self.available_triggers = []
-        self.selected_trigger = None
-        self.preview_flips = []
-        # 新增：分组相关
-        self.available_groups = []
-        self.selected_group = None
-
-    def start_chain_flip(self, player: int) -> bool:
-        """开始连锁翻转阶段，返回是否有可翻转的"""
-        self.player = player
-        self.available_triggers = self.flip_rule.get_triggers(player)
-        self.selected_trigger = None
-        self.preview_flips = []
-        self.available_groups = []
-        self.selected_group = None
-        return len(self.available_triggers) > 0
-
-    def get_triggers(self) -> List[Tuple[int, int]]:
-        """获取可用触发点"""
-        return self.available_triggers
-
-    def get_preview_flips(self) -> List[Tuple[int, int]]:
-        """获取当前预览的翻转位置"""
-        return self.preview_flips
-
-    def get_available_groups(self) -> List[dict]:
-        """获取当前选中触发点的可用分组"""
-        return self.available_groups
-
-    def get_selected_group(self) -> Optional[int]:
-        """获取当前选中的分组索引"""
-        return self.selected_group
-
-    def select_trigger(self, pos: Tuple[int, int]):
-        """选择一个触发点"""
-        if pos in self.available_triggers:
-            self.selected_trigger = pos
-            self.available_groups = self.flip_rule.get_flip_groups_for_trigger(self.player, pos)
-            self.selected_group = None
-            # 默认预览第一个组
-            if self.available_groups:
-                self.preview_flips = [p for p, _ in self.available_groups[0]["flips"]]
-            else:
-                self.preview_flips = []
-
-    def select_group(self, pos: Tuple[int, int]):
-        """选择一个翻转组"""
-        if self.selected_trigger is None:
-            return
-        for i, group in enumerate(self.available_groups):
-            for p, _ in group["flips"]:
-                if p == pos:
-                    self.selected_group = i
-                    self.preview_flips = [p for p, _ in group["flips"]]
-                    return
-
-    def apply_group(self) -> bool:
-        """应用选中的翻转组，返回是否还能继续连锁"""
-        if self.selected_trigger is None or self.selected_group is None:
-            return False
-
-        group = self.available_groups[self.selected_group]
-        for pos, reason in group["flips"]:
-            self.board.set_piece(pos, self.player)
-            self.logger.log_flip(self.player, pos, reason)
-
-        # 重新获取该触发点的剩余分组（可能有新产生的，但先检查当前触发点是否还有效）
-        remaining_groups = self.flip_rule.get_flip_groups_for_trigger(self.player, self.selected_trigger)
-        if remaining_groups:
-            # 还有其他分组可选，保持在当前触发点
-            self.available_groups = remaining_groups
-            self.selected_group = None
-            self.preview_flips = [p for p, _ in remaining_groups[0]["flips"]]
-            return True
-        else:
-            # 当前触发点已无分组，检查是否有其他触发点
-            self.selected_trigger = None
-            self.available_groups = []
-            self.selected_group = None
-            self.preview_flips = []
-            self.available_triggers = self.flip_rule.get_triggers(self.player)
-            return len(self.available_triggers) > 0
 
 
 class Game:
@@ -397,24 +72,39 @@ class Game:
     FLIPPING = "flipping"
     CHAIN_FLIPPING = "chain_flipping"
     GAME_OVER = "game_over"
+    MODE_SELECT = "mode_select"
+    RULE_INTRO = "rule_intro"
+    ANIMATING = "animating"
 
     def __init__(self, logger: GameLogger):
         self.logger = logger
         self.board = Board()
         self.flip_rule = FlipRule(self.board)
-        self.chain_handler = ChainFlipHandler(self.board, self.flip_rule, logger)
+        self.chain_handler = ChainFlipHandler(self.board, self.flip_rule)
 
         self.current_player = 1
-        self.state = Game.SELECTING
+        self.state = Game.MODE_SELECT
         self.selected_pos = None
         self.pending_flips = []
-        self.pending_flip_groups = []  # 翻转分组
-        self.selected_flip_group = None  # 选中的分组索引
+        self.pending_flip_groups = []
+        self.selected_flip_group = None
+
+        self.game_mode = None
+        self.ai_player = None
+
+        self.after_anim_state = None
+        self.after_anim_data = None
 
         self.logger.log_board_state(self.board.grid)
 
+    def set_mode(self, mode: str):
+        self.game_mode = mode
+        if mode == 'pve':
+            self.ai_player = AIPlayer(2)
+        self.state = Game.SELECTING
+        self.logger.log_turn_start(1)
+
     def select_piece(self, pos: Tuple[int, int]) -> bool:
-        """选择棋子"""
         if self.state != Game.SELECTING:
             return False
         if self.board.get_piece(pos) != self.current_player:
@@ -426,34 +116,85 @@ class Game:
         return True
 
     def move_to(self, pos: Tuple[int, int]) -> bool:
-        """移动到指定位置"""
         if self.state != Game.MOVING:
             return False
         if pos not in self.board.get_valid_moves(self.current_player, self.selected_pos):
             return False
 
-        # 执行移动
         from_pos = self.selected_pos
-        self.board.move_piece(from_pos, pos)
-        self.logger.log_move(self.current_player, from_pos, pos)
+        self.after_anim_data = {
+            "type": "move",
+            "from": from_pos,
+            "to": pos
+        }
+        self.after_anim_state = Game.FLIPPING
+        self.state = Game.ANIMATING
+        return True
+
+    def do_real_move(self, from_pos, to_pos):
+        self.board.move_piece(from_pos, to_pos)
+        self.logger.log_move(self.current_player, from_pos, to_pos)
         self.logger.log_board_state(self.board.grid)
 
-        # 检查翻转
-        self.pending_flip_groups = self.flip_rule.get_flip_groups_after_move(self.current_player, pos)
-        self.pending_flips = self.flip_rule.get_flips_after_move(self.current_player, pos)
+        self.pending_flip_groups = self.flip_rule.get_flip_groups_after_move(self.current_player, to_pos)
+        self.pending_flips = self.flip_rule.get_flips_after_move(self.current_player, to_pos)
         self.selected_flip_group = None
+        self.selected_pos = to_pos
+
         if self.pending_flip_groups:
             self.state = Game.FLIPPING
-            self.selected_pos = pos
             for i, g in enumerate(self.pending_flip_groups):
                 self.logger.log(f"翻转组{i}: {[p for p, _ in g['flips']]} (规则{g['type']})")
         else:
             self._end_turn()
 
-        return True
+    def ai_move(self):
+        if self.game_mode != 'pve' or self.current_player != 2:
+            return
+        if self.ai_player is None:
+            return
+        if self.state != Game.SELECTING:
+            return
+
+        from_pos, to_pos = self.ai_player.choose_move(self.board)
+        if from_pos is None or to_pos is None:
+            return
+        self.select_piece(from_pos)
+        self.move_to(to_pos)
+
+    def ai_flip(self):
+        if self.state != Game.FLIPPING or not self.pending_flip_groups:
+            return
+
+        group_idx = self.ai_player.choose_flip_group(self.pending_flip_groups)
+        self.selected_flip_group = group_idx
+        self.apply_flips()
+
+    def ai_chain(self):
+        if self.state != Game.CHAIN_FLIPPING:
+            return
+
+        if self.chain_handler.selected_trigger is None:
+            triggers = self.chain_handler.get_triggers()
+            if not triggers:
+                self.chain_skip()
+                return
+            self.chain_handler.select_trigger(triggers[0])
+            return
+
+        if self.chain_handler.selected_group is None:
+            groups = self.chain_handler.get_available_groups()
+            if not groups:
+                self.chain_handler.selected_trigger = None
+                return
+            group_idx = self.ai_player.choose_flip_group(groups)
+            self.chain_handler.selected_group = group_idx
+            self.chain_handler.preview_flips = [p for p, _ in groups[group_idx]["flips"]]
+            return
+
+        self.chain_apply()
 
     def select_flip_group(self, pos: Tuple[int, int]):
-        """选择翻转组"""
         if self.state != Game.FLIPPING:
             return
         for i, group in enumerate(self.pending_flip_groups):
@@ -463,23 +204,32 @@ class Game:
                     return
 
     def apply_flips(self):
-        """应用选中的翻转组"""
         if self.state != Game.FLIPPING:
             return
         if self.selected_flip_group is None:
             return
 
         group = self.pending_flip_groups[self.selected_flip_group]
-        for pos, reason in group["flips"]:
-            self.board.set_piece(pos, self.current_player)
-            self.logger.log_flip(self.current_player, pos, reason)
+        flip_list = [(pos, self.current_player) for pos, reason in group["flips"]]
+        reasons = [reason for pos, reason in group["flips"]]
+        self.after_anim_data = {
+            "type": "flip",
+            "flips": flip_list,
+            "reasons": reasons
+        }
+        self.after_anim_state = Game.CHAIN_FLIPPING
+        self.state = Game.ANIMATING
+
+    def do_real_flip(self, flip_list, reasons):
+        for i, (pos, player) in enumerate(flip_list):
+            self.board.set_piece(pos, player)
+            self.logger.log_flip(player, pos, reasons[i])
 
         self.logger.log_board_state(self.board.grid)
-
-        # 检查连锁翻转
         self.pending_flips = []
         self.pending_flip_groups = []
         self.selected_flip_group = None
+
         if self.chain_handler.start_chain_flip(self.current_player):
             self.state = Game.CHAIN_FLIPPING
             self.logger.log_chain_flip_start()
@@ -487,7 +237,6 @@ class Game:
             self._end_turn()
 
     def skip_flips(self):
-        """跳过翻转阶段（如果玩家不想翻转任何组）"""
         if self.state != Game.FLIPPING:
             return
         self.logger.log(f"玩家{self.current_player} 跳过翻转")
@@ -497,43 +246,73 @@ class Game:
         self._end_turn()
 
     def chain_select(self, pos: Tuple[int, int]):
-        """连锁翻转时选择触发点或翻转组"""
         if self.state != Game.CHAIN_FLIPPING:
             return
-        # 如果已选中触发点，尝试选择分组
         if self.chain_handler.selected_trigger is not None:
             self.chain_handler.select_group(pos)
-        # 否则选择触发点
-        if self.chain_handler.selected_trigger is None or pos in self.chain_handler.available_triggers:
+        if self.chain_handler.selected_trigger is None or pos in self.chain_handler.get_triggers():
             self.chain_handler.select_trigger(pos)
 
     def chain_apply(self):
-        """应用连锁翻转"""
         if self.state != Game.CHAIN_FLIPPING:
             return
+        if self.chain_handler.selected_trigger is None or self.chain_handler.selected_group is None:
+            return
 
-        has_more = self.chain_handler.apply_group()
+        # 先保存要翻转的数据用于动画
+        groups = self.chain_handler.available_groups
+        group = groups[self.chain_handler.selected_group]
+        flip_list = [(pos, self.current_player) for pos, reason in group["flips"]]
+        reasons = [reason for pos, reason in group["flips"]]
+
+        self.after_anim_data = {
+            "type": "chain_flip",
+            "flips": flip_list,
+            "reasons": reasons
+        }
+        self.after_anim_state = Game.CHAIN_FLIPPING
+        self.state = Game.ANIMATING
+
+    def do_real_chain_flip(self, flip_list, reasons):
+        # 用ChainFlipHandler来处理实际的逻辑，它会正确更新状态
+        for i, (pos, player) in enumerate(flip_list):
+            self.board.set_piece(pos, player)
+            self.logger.log_flip(player, pos, reasons[i])
         self.logger.log_board_state(self.board.grid)
 
-        if not has_more:
-            self._end_turn()
+        # 让ChainFlipHandler正确处理后续状态
+        # 重新获取该触发点的剩余分组
+        remaining_groups = self.flip_rule.get_flip_groups_for_trigger(self.current_player, self.chain_handler.selected_trigger)
+        if remaining_groups:
+            # 还有其他分组可选，保持在当前触发点
+            self.chain_handler.available_groups = remaining_groups
+            self.chain_handler.selected_group = None
+            self.chain_handler.preview_flips = [p for p, _ in remaining_groups[0]["flips"]]
+            self.state = Game.CHAIN_FLIPPING
+        else:
+            # 当前触发点已无分组，检查是否有其他触发点
+            self.chain_handler.selected_trigger = None
+            self.chain_handler.available_groups = []
+            self.chain_handler.selected_group = None
+            self.chain_handler.preview_flips = []
+            self.chain_handler.available_triggers = self.flip_rule.get_triggers(self.current_player)
+            if self.chain_handler.available_triggers:
+                self.state = Game.CHAIN_FLIPPING
+            else:
+                self._end_turn()
 
     def chain_skip(self):
-        """跳过连锁翻转"""
         if self.state != Game.CHAIN_FLIPPING:
             return
         self.logger.log_chain_flip_choice(self.current_player, "跳过")
         self._end_turn()
 
     def cancel_selection(self):
-        """取消选择"""
         if self.state == Game.MOVING:
             self.state = Game.SELECTING
             self.selected_pos = None
 
     def _end_turn(self):
-        """结束回合"""
-        # 检查游戏结束
         p1_count = self.board.count_pieces(1)
         p2_count = self.board.count_pieces(2)
 
@@ -546,14 +325,18 @@ class Game:
             self.logger.log_game_over(1)
             return
 
-        # 切换玩家
         self.current_player = 3 - self.current_player
+        if not self.board.has_any_move(self.current_player):
+            winner = 3 - self.current_player
+            self.state = Game.GAME_OVER
+            self.logger.log(f"玩家{self.current_player}无子可走！玩家{winner}获胜！")
+            self.logger.log_game_over(winner)
+            return
         self.state = Game.SELECTING
         self.selected_pos = None
         self.logger.log_turn_start(self.current_player)
 
     def restart(self):
-        """重新开始"""
         self.__init__(self.logger)
 
 
@@ -563,19 +346,33 @@ class GUI:
     def __init__(self, game: Game, logger: GameLogger):
         pygame.init()
         self.screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
-        pygame.display.set_caption("双人棋类游戏")
+        pygame.display.set_caption("翻转棋")
         self.clock = pygame.time.Clock()
         self.font = pygame.font.SysFont("simhei", 24)
         self.small_font = pygame.font.SysFont("simhei", 18)
+        self.large_font = pygame.font.SysFont("simhei", 36)
 
         self.game = game
         self.logger = logger
 
-    def pos_to_screen(self, pos: Tuple[int, int]) -> Tuple[int, int]:
-        x, y = pos
-        return (MARGIN + x * CELL_SIZE, MARGIN + y * CELL_SIZE)
+        self.ai_action_timer = 0
+        self.ai_action_delay = 800
 
-    def screen_to_pos(self, screen_pos: Tuple[int, int]) -> Optional[Tuple[int, int]]:
+        self.rule_page = 0
+        self.rule_anim_timer = 0
+
+        self.anim_timer = 0
+        self.anim_duration = 300
+        self.anim_type = None
+        self.anim_move_from = None
+        self.anim_move_to = None
+        self.anim_flips = []
+        self.anim_saved_piece = None
+
+    def pos_to_screen(self, pos):
+        return (MARGIN + pos[0] * CELL_SIZE, MARGIN + pos[1] * CELL_SIZE)
+
+    def screen_to_pos(self, screen_pos):
         sx, sy = screen_pos
         x = round((sx - MARGIN) / CELL_SIZE)
         y = round((sy - MARGIN) / CELL_SIZE)
@@ -586,197 +383,472 @@ class GUI:
                 return (x, y)
         return None
 
-    def draw_board(self):
-        """绘制棋盘"""
+    def draw_button(self, rect, text, hover):
+        color = BUTTON_HOVER if hover else BUTTON_COLOR
+        pygame.draw.rect(self.screen, color, rect, border_radius=10)
+        txt = self.font.render(text, True, BLACK)
+        self.screen.blit(txt, (rect.centerx - txt.get_width() // 2,
+                                rect.centery - txt.get_height() // 2))
+
+    def draw_mode_select(self):
         self.screen.fill(BOARD_COLOR)
 
-        # 绘制横线
-        for y in range(GRID_SIZE):
-            start = self.pos_to_screen((0, y))
-            end = self.pos_to_screen((GRID_SIZE - 1, y))
-            pygame.draw.line(self.screen, BLACK, start, end, 2)
+        title = self.large_font.render("翻 转 棋", True, BLACK)
+        self.screen.blit(title, (WINDOW_WIDTH // 2 - title.get_width() // 2, 80))
 
-        # 绘制竖线
-        for x in range(GRID_SIZE):
-            start = self.pos_to_screen((x, 0))
-            end = self.pos_to_screen((x, GRID_SIZE - 1))
-            pygame.draw.line(self.screen, BLACK, start, end, 2)
+        mouse_pos = pygame.mouse.get_pos()
 
-        # 绘制斜线
-        for y in range(GRID_SIZE - 1):
-            for x in range(GRID_SIZE - 1):
-                if y % 2 == 1:
-                    # 奇数行: 右下斜 \
-                    start = self.pos_to_screen((x, y))
-                    end = self.pos_to_screen((x + 1, y + 1))
-                    pygame.draw.line(self.screen, BLACK, start, end, 1)
+        pvp_rect = pygame.Rect(WINDOW_WIDTH // 2 - 150, 180, 300, 60)
+        self.draw_button(pvp_rect, "双人对战 (PVP)", pvp_rect.collidepoint(mouse_pos))
+        self.pvp_btn = pvp_rect
+
+        pve_rect = pygame.Rect(WINDOW_WIDTH // 2 - 150, 270, 300, 60)
+        self.draw_button(pve_rect, "人机对战 (PVE)", pve_rect.collidepoint(mouse_pos))
+        self.pve_btn = pve_rect
+
+        rule_rect = pygame.Rect(WINDOW_WIDTH // 2 - 150, 360, 300, 60)
+        self.draw_button(rule_rect, "规则介绍", rule_rect.collidepoint(mouse_pos))
+        self.rule_btn = rule_rect
+
+    def draw_rule_intro(self, dt):
+        self.screen.fill(BOARD_COLOR)
+        self.rule_anim_timer += dt
+
+        title = self.large_font.render("游戏规则", True, BLACK)
+        self.screen.blit(title, (WINDOW_WIDTH // 2 - title.get_width() // 2, 30))
+
+        mouse_pos = pygame.mouse.get_pos()
+        if self.rule_page < 4:
+            next_btn = pygame.Rect(WINDOW_WIDTH - 200, WINDOW_HEIGHT - 70, 160, 45)
+            self.draw_button(next_btn, "下一步 ->", next_btn.collidepoint(mouse_pos))
+            self.next_btn = next_btn
+        else:
+            back_btn = pygame.Rect(WINDOW_WIDTH // 2 - 80, WINDOW_HEIGHT - 70, 160, 45)
+            self.draw_button(back_btn, "返回", back_btn.collidepoint(mouse_pos))
+            self.back_to_mode_btn = back_btn
+
+        if self.rule_page > 0:
+            prev_btn = pygame.Rect(40, WINDOW_HEIGHT - 70, 160, 45)
+            self.draw_button(prev_btn, "<- 上一步", prev_btn.collidepoint(mouse_pos))
+            self.prev_btn = prev_btn
+
+        if self.rule_page == 0:
+            self.draw_rule_page1()
+        elif self.rule_page == 1:
+            self.draw_rule_page2(dt)
+        elif self.rule_page == 2:
+            self.draw_rule_page3(dt)
+        elif self.rule_page == 3:
+            self.draw_rule_page4(dt)
+        else:
+            self.draw_rule_page5()
+
+        total_pages = 5
+        page_text = self.small_font.render(f"{self.rule_page + 1}/{total_pages}", True, BLACK)
+        self.screen.blit(page_text, (WINDOW_WIDTH // 2 - 15, WINDOW_HEIGHT - 110))
+
+    def draw_rule_page1(self):
+        desc = [
+            "棋盘为7x7的交叉点，双方各14个棋子",
+            "红方先手，轮流走棋",
+            "棋子沿横竖或斜线走一格",
+            "斜线：奇数行右下斜，偶数行右上斜"
+        ]
+        y = 100
+        for line in desc:
+            txt = self.font.render(line, True, BLACK)
+            self.screen.blit(txt, (80, y))
+            y += 40
+
+        # 画初始棋盘
+        init_board = Board()
+        self.draw_small_board(180, y + 10, 0.6, init_board)
+
+    def draw_rule_page2(self, dt):
+        desc = [
+            "规则A：己-敌-己",
+            "走棋后，如果己方两子中间夹一个敌方，",
+            "则可以将敌方翻转！"
+        ]
+        y = 90
+        for line in desc:
+            txt = self.font.render(line, True, BLACK)
+            self.screen.blit(txt, (80, y))
+            y += 40
+
+        # 只有3个棋子，最简单的演示
+        board = Board()
+        board.grid = [[0]*7 for _ in range(7)]
+
+        t = (self.rule_anim_timer % 3000) / 3000
+        if t < 0.3:
+            board.grid[3][1] = 1  # 左红
+            board.grid[3][5] = 1  # 右红（最右边）
+            board.grid[3][3] = 2  # 敌人在中间
+            label = self.small_font.render("初始状态：两个红子在两边", True, BLACK)
+        elif t < 0.6:
+            board.grid[3][1] = 1
+            board.grid[3][3] = 1  # 红走过来
+            board.grid[3][2] = 2  # 敌人在左
+            label = self.small_font.render("红走过来，形成己-敌-己", True, (180, 0, 0))
+        else:
+            board.grid[3][1] = 1
+            board.grid[3][2] = 1
+            board.grid[3][3] = 1
+            label = self.small_font.render("翻转敌人！", True, BLACK)
+
+        self.draw_small_board(180, y, 0.7, board)
+        self.screen.blit(label, (WINDOW_WIDTH // 2 - label.get_width() // 2, y + 240))
+
+    def draw_rule_page3(self, dt):
+        desc = [
+            "规则B：敌-己-敌",
+            "走棋后，如果己方棋子插到两个敌方中间，",
+            "则可以把两边敌方同时翻转！"
+        ]
+        y = 90
+        for line in desc:
+            txt = self.font.render(line, True, BLACK)
+            self.screen.blit(txt, (80, y))
+            y += 40
+
+        board = Board()
+        board.grid = [[0]*7 for _ in range(7)]
+
+        t = (self.rule_anim_timer % 3000) / 3000
+        if t < 0.3:
+            board.grid[3][1] = 2  # 左蓝
+            board.grid[3][5] = 2  # 右蓝
+            board.grid[3][6] = 1  # 红在最右边
+            label = self.small_font.render("初始状态", True, BLACK)
+        elif t < 0.6:
+            board.grid[3][1] = 2
+            board.grid[3][5] = 2
+            board.grid[3][3] = 1  # 红走到中间
+            label = self.small_font.render("红走到中间，形成敌-己-敌", True, (180, 0, 0))
+        else:
+            board.grid[3][1] = 1
+            board.grid[3][3] = 1
+            board.grid[3][5] = 1
+            label = self.small_font.render("两边都翻转！", True, BLACK)
+
+        self.draw_small_board(180, y, 0.7, board)
+        self.screen.blit(label, (WINDOW_WIDTH // 2 - label.get_width() // 2, y + 240))
+
+    def draw_rule_page4(self, dt):
+        desc = [
+            "规则C：连锁翻转",
+            "一次翻转后，如果又满足新规则，",
+            "可以选择继续翻转或跳过"
+        ]
+        y = 90
+        for line in desc:
+            txt = self.font.render(line, True, BLACK)
+            self.screen.blit(txt, (80, y))
+            y += 40
+
+        t = (self.rule_anim_timer % 4000) / 4000
+        board = Board()
+        board.grid = [[0]*7 for _ in range(7)]
+
+        if t < 0.25:
+            board.grid[2][3] = 2
+            board.grid[3][4] = 2
+            board.grid[4][3] = 2
+            board.grid[4][5] = 1
+            from_x, from_y = 5, 4
+            to_x, to_y = 4, 4
+            curr_x = from_x + (to_x - from_x) * (t / 0.25)
+            board.grid[4][4] = 0
+            board.grid[round(curr_x)][4] = 1
+            label = self.small_font.render("1. 红方走棋...", True, BLACK)
+        elif t < 0.5:
+            board.grid[2][3] = 2
+            board.grid[3][4] = 2
+            board.grid[4][3] = 2
+            board.grid[4][4] = 1
+            label = self.small_font.render("2. 翻转一个敌子", True, BLACK)
+        elif t < 0.75:
+            board.grid[2][3] = 2
+            board.grid[3][4] = 1
+            board.grid[4][3] = 2
+            board.grid[4][4] = 1
+            label = self.small_font.render("3. 又满足规则，连锁翻转！", True, (180, 0, 0))
+        else:
+            board.grid[2][3] = 1
+            board.grid[3][4] = 1
+            board.grid[4][3] = 1
+            board.grid[4][4] = 1
+            label = self.small_font.render("4. 连锁完成！", True, BLACK)
+
+        self.draw_small_board(180, y, 0.7, board)
+        self.screen.blit(label, (WINDOW_WIDTH // 2 - label.get_width() // 2, y + 240))
+
+    def draw_rule_page5(self):
+        desc = [
+            "胜利条件：",
+            "1. 对方棋子归零",
+            "2. 对方无法走任何一步"
+        ]
+        y = 120
+        for line in desc:
+            txt = self.font.render(line, True, BLACK)
+            self.screen.blit(txt, (WINDOW_WIDTH // 2 - txt.get_width() // 2, y))
+            y += 50
+
+    def draw_small_board(self, x, y, scale, board_data):
+        cell = int(CELL_SIZE * scale)
+        radius = int(20 * scale)
+
+        # 画线
+        for gy in range(GRID_SIZE):
+            s, e = (x, y + gy * cell), (x + (GRID_SIZE - 1) * cell, y + gy * cell)
+            pygame.draw.line(self.screen, BLACK, s, e, 2)
+        for gx in range(GRID_SIZE):
+            s, e = (x + gx * cell, y), (x + gx * cell, y + (GRID_SIZE - 1) * cell)
+            pygame.draw.line(self.screen, BLACK, s, e, 2)
+
+        for gy in range(GRID_SIZE - 1):
+            for gx in range(GRID_SIZE - 1):
+                if gy % 2 == 1:
+                    s = (x + gx * cell, y + gy * cell)
+                    e = (x + (gx + 1) * cell, y + (gy + 1) * cell)
                 else:
-                    # 偶数行: 右上斜 /
-                    start = self.pos_to_screen((x + 1, y))
-                    end = self.pos_to_screen((x, y + 1))
-                    pygame.draw.line(self.screen, BLACK, start, end, 1)
+                    s = (x + (gx + 1) * cell, y + gy * cell)
+                    e = (x + gx * cell, y + (gy + 1) * cell)
+                pygame.draw.line(self.screen, BLACK, s, e, 1)
 
-        # 绘制坐标提示
-        for x in range(GRID_SIZE):
-            txt = self.small_font.render(str(x), True, BLACK)
-            pos = self.pos_to_screen((x, -0.4))
+        # 画棋子（注意数组索引是[行][列]=[y][x]）
+        for gy in range(GRID_SIZE):
+            for gx in range(GRID_SIZE):
+                p = board_data.grid[gy][gx]
+                if p != 0:
+                    color = PLAYER1_COLOR if p == 1 else PLAYER2_COLOR
+                    cx = x + gx * cell
+                    cy = y + gy * cell
+                    pygame.draw.circle(self.screen, color, (cx, cy), radius)
+                    pygame.draw.circle(self.screen, BLACK, (cx, cy), radius, 2)
+
+    def draw_board(self):
+        self.screen.fill(BOARD_COLOR)
+
+        for gy in range(GRID_SIZE):
+            s, e = self.pos_to_screen((0, gy)), self.pos_to_screen((GRID_SIZE - 1, gy))
+            pygame.draw.line(self.screen, BLACK, s, e, 2)
+        for gx in range(GRID_SIZE):
+            s, e = self.pos_to_screen((gx, 0)), self.pos_to_screen((gx, GRID_SIZE - 1))
+            pygame.draw.line(self.screen, BLACK, s, e, 2)
+
+        for gy in range(GRID_SIZE - 1):
+            for gx in range(GRID_SIZE - 1):
+                if gy % 2 == 1:
+                    s = self.pos_to_screen((gx, gy))
+                    e = self.pos_to_screen((gx + 1, gy + 1))
+                else:
+                    s = self.pos_to_screen((gx + 1, gy))
+                    e = self.pos_to_screen((gx, gy + 1))
+                pygame.draw.line(self.screen, BLACK, s, e, 1)
+
+        for xc in range(GRID_SIZE):
+            txt = self.small_font.render(str(xc), True, BLACK)
+            pos = self.pos_to_screen((xc, -0.4))
             self.screen.blit(txt, (pos[0] - txt.get_width() // 2, pos[1]))
-        for y in range(GRID_SIZE):
-            txt = self.small_font.render(str(y), True, BLACK)
-            pos = self.pos_to_screen((-0.4, y))
+        for yc in range(GRID_SIZE):
+            txt = self.small_font.render(str(yc), True, BLACK)
+            pos = self.pos_to_screen((-0.4, yc))
             self.screen.blit(txt, (pos[0] - txt.get_width() // 2, pos[1] - txt.get_height() // 2))
 
-    def draw_pieces(self):
-        """绘制棋子"""
-        for y in range(GRID_SIZE):
-            for x in range(GRID_SIZE):
-                piece = self.game.board.get_piece((x, y))
-                if piece != 0:
-                    color = PLAYER1_COLOR if piece == 1 else PLAYER2_COLOR
-                    center = self.pos_to_screen((x, y))
-                    pygame.draw.circle(self.screen, color, center, 25)
-                    pygame.draw.circle(self.screen, BLACK, center, 25, 2)
+    def draw_pieces(self, skip_pos=None):
+        for gy in range(GRID_SIZE):
+            for gx in range(GRID_SIZE):
+                if skip_pos and (gx, gy) == skip_pos:
+                    continue  # 跳过指定位置（移动动画时用）
+                p = self.game.board.get_piece((gx, gy))
+                if p != 0:
+                    color = PLAYER1_COLOR if p == 1 else PLAYER2_COLOR
+                    c = self.pos_to_screen((gx, gy))
+                    pygame.draw.circle(self.screen, color, c, 25)
+                    pygame.draw.circle(self.screen, BLACK, c, 25, 2)
+
+    def draw_moving_animation(self):
+        t = self.anim_timer / self.anim_duration
+        from_x, from_y = self.anim_move_from
+        to_x, to_y = self.anim_move_to
+        curr_x = from_x + (to_x - from_x) * t
+        curr_y = from_y + (to_y - from_y) * t
+        center = (MARGIN + curr_x * CELL_SIZE, MARGIN + curr_y * CELL_SIZE)
+        color = PLAYER1_COLOR if self.anim_saved_piece == 1 else PLAYER2_COLOR
+        pygame.draw.circle(self.screen, color, center, 25)
+        pygame.draw.circle(self.screen, BLACK, center, 25, 2)
+
+    def draw_flipping_animation(self):
+        t = self.anim_timer / self.anim_duration
+        for (gx, gy), old_c, new_c in self.anim_flips:
+            center = self.pos_to_screen((gx, gy))
+            scale = 1.0 - abs(0.5 - t) * 0.6
+            r = int(old_c[0] + (new_c[0] - old_c[0]) * t)
+            g = int(old_c[1] + (new_c[1] - old_c[1]) * t)
+            b = int(old_c[2] + (new_c[2] - old_c[2]) * t)
+            col = (r, g, b)
+            rad = int(25 * scale)
+            pygame.draw.circle(self.screen, col, center, rad)
+            pygame.draw.circle(self.screen, BLACK, center, rad, 2)
 
     def draw_highlight(self):
-        """绘制高亮提示"""
-        # 选中的棋子
-        if self.game.selected_pos:
-            center = self.pos_to_screen(self.game.selected_pos)
-            pygame.draw.circle(self.screen, SELECTED_COLOR, center, 30, 4)
+        # 动画状态下不显示选中高亮和移动提示
+        if self.game.state == Game.ANIMATING:
+            pass
+        else:
+            if self.game.selected_pos:
+                c = self.pos_to_screen(self.game.selected_pos)
+                pygame.draw.circle(self.screen, SELECTED_COLOR, c, 30, 4)
 
-        # 合法移动位置
-        if self.game.state == Game.MOVING:
-            valid_moves = self.game.board.get_valid_moves(self.game.current_player, self.game.selected_pos)
-            for pos in valid_moves:
-                center = self.pos_to_screen(pos)
-                pygame.draw.circle(self.screen, HIGHLIGHT_COLOR, center, 15, 3)
+            if self.game.state == Game.MOVING:
+                for pos in self.game.board.get_valid_moves(self.game.current_player, self.game.selected_pos):
+                    c = self.pos_to_screen(pos)
+                    pygame.draw.circle(self.screen, HIGHLIGHT_COLOR, c, 15, 3)
 
-        # 待翻转的棋子 - 分组显示
         if self.game.state == Game.FLIPPING:
-            colors = [(0, 200, 255), (255, 0, 255), (0, 255, 128), (255, 128, 0)]  # 不同组颜色
+            colors = [(0, 200, 255), (255, 0, 255), (0, 255, 128), (255, 128, 0)]
             for i, group in enumerate(self.game.pending_flip_groups):
-                color = colors[i % len(colors)]
-                is_selected = self.game.selected_flip_group == i
-                line_width = 6 if is_selected else 3
+                col = colors[i % len(colors)]
+                w = 6 if self.game.selected_flip_group == i else 3
                 for pos, _ in group["flips"]:
-                    center = self.pos_to_screen(pos)
-                    pygame.draw.circle(self.screen, color, center, 30, line_width)
+                    c = self.pos_to_screen(pos)
+                    pygame.draw.circle(self.screen, col, c, 30, w)
 
-        # 连锁翻转选择
         if self.game.state == Game.CHAIN_FLIPPING:
             triggers = self.game.chain_handler.get_triggers()
-            preview = self.game.chain_handler.get_preview_flips()
-            selected_trigger = self.game.chain_handler.selected_trigger
+            sel_trig = self.game.chain_handler.selected_trigger
             groups = self.game.chain_handler.get_available_groups()
-            selected_group_idx = self.game.chain_handler.get_selected_group()
+            sel_idx = self.game.chain_handler.get_selected_group()
 
-            # 绘制可点击的触发点（己方棋子）
             for pos in triggers:
-                center = self.pos_to_screen(pos)
-                # 画一个白色圆圈在后面，确保可见
-                pygame.draw.circle(self.screen, (255,255,255), center, 35)
-                # 再画棋子
-                color = PLAYER1_COLOR if self.game.current_player == 1 else PLAYER2_COLOR
-                pygame.draw.circle(self.screen, color, center, 25)
-                pygame.draw.circle(self.screen, HIGHLIGHT_COLOR, center, 35, 6)
+                c = self.pos_to_screen(pos)
+                pygame.draw.circle(self.screen, (255, 255, 255), c, 35)
+                col = PLAYER1_COLOR if self.game.current_player == 1 else PLAYER2_COLOR
+                pygame.draw.circle(self.screen, col, c, 25)
+                pygame.draw.circle(self.screen, HIGHLIGHT_COLOR, c, 35, 6)
 
-            # 如果已选中触发点且有分组，分组显示待翻转棋子
-            if selected_trigger is not None and groups:
+            if sel_trig is not None and groups:
                 colors = [(0, 200, 255), (255, 0, 255), (0, 255, 128), (255, 128, 0)]
                 for i, group in enumerate(groups):
-                    color = colors[i % len(colors)]
-                    is_selected = selected_group_idx == i
-                    line_width = 6 if is_selected else 3
+                    col = colors[i % len(colors)]
+                    w = 6 if sel_idx == i else 3
                     for pos, _ in group["flips"]:
-                        center = self.pos_to_screen(pos)
-                        pygame.draw.circle(self.screen, color, center, 30, line_width)
+                        c = self.pos_to_screen(pos)
+                        pygame.draw.circle(self.screen, col, c, 30, w)
             else:
-                # 否则只画预览
+                preview = self.game.chain_handler.get_preview_flips()
                 for pos in preview:
-                    center = self.pos_to_screen(pos)
-                    pygame.draw.circle(self.screen, SELECTED_COLOR, center, 30, 5)
+                    c = self.pos_to_screen(pos)
+                    pygame.draw.circle(self.screen, SELECTED_COLOR, c, 30, 5)
 
     def draw_ui(self):
-        """绘制UI"""
         y = MARGIN + CELL_SIZE * (GRID_SIZE - 1) + 20
 
-        # 状态提示
-        if self.game.state == Game.GAME_OVER:
+        if self.game.state == Game.ANIMATING:
+            msg = "..."
+            txt_color = BLACK
+        elif self.game.state == Game.GAME_OVER:
             winner = 2 if self.game.board.count_pieces(1) == 0 else 1
-            txt = self.font.render(f"游戏结束! 玩家{winner} 获胜! 点击重新开始", True, BLACK)
+            msg = f"游戏结束! 玩家{winner}获胜! 点击重新开始"
+            txt_color = BLACK
         else:
-            color = PLAYER1_COLOR if self.game.current_player == 1 else PLAYER2_COLOR
-            player_name = f"玩家{self.game.current_player}"
+            col = PLAYER1_COLOR if self.game.current_player == 1 else PLAYER2_COLOR
+            p_name = f"玩家{self.game.current_player}"
+            if self.game.game_mode == 'pve' and self.game.current_player == 2:
+                p_name = "AI(蓝方)"
+
             if self.game.state == Game.SELECTING:
-                msg = f"{player_name} - 选择棋子"
+                msg = f"{p_name} - 选择棋子"
             elif self.game.state == Game.MOVING:
-                msg = f"{player_name} - 选择目标位置 (右键取消)"
+                msg = f"{p_name} - 选择目标位置 (右键取消)"
             elif self.game.state == Game.FLIPPING:
-                msg = f"{player_name} - 点击棋子选择翻转组, 确认/跳过"
+                msg = f"{p_name} - 选择翻转组, 确认/跳过"
             elif self.game.state == Game.CHAIN_FLIPPING:
-                msg = f"{player_name} - 选择触发点, 再选择翻转组, 确认/跳过"
+                msg = f"{p_name} - 连锁翻转"
             else:
                 msg = ""
-            txt = self.font.render(msg, True, color)
+            txt_color = col
 
+        txt = self.font.render(msg, True, txt_color)
         self.screen.blit(txt, (20, y))
 
-        # 棋子统计
-        p1 = self.game.board.count_pieces(1)
-        p2 = self.game.board.count_pieces(2)
-        stat = self.font.render(f"红: {p1}  蓝: {p2}", True, BLACK)
-        self.screen.blit(stat, (WINDOW_WIDTH - 200, y))
+        p1_count = self.game.board.count_pieces(1)
+        p2_count = self.game.board.count_pieces(2)
+        stat_txt = f"红方: {p1_count}  蓝方: {p2_count}"
+        if self.game.game_mode == 'pve':
+            stat_txt = f"红方(你): {p1_count}  蓝方(AI): {p2_count}"
+        stat = self.font.render(stat_txt, True, BLACK)
+        self.screen.blit(stat, (WINDOW_WIDTH - 220, y))
 
-        # 翻转按钮
         if self.game.state == Game.FLIPPING:
-            self._draw_flip_buttons()
-        # 连锁翻转按钮
+            self.draw_flip_buttons()
         elif self.game.state == Game.CHAIN_FLIPPING:
-            self._draw_chain_buttons()
+            self.draw_chain_buttons()
 
-    def _draw_flip_buttons(self):
-        """绘制翻转阶段按钮"""
+    def draw_flip_buttons(self):
         y = WINDOW_HEIGHT - 50
+        m_pos = pygame.mouse.get_pos()
+        btn_conf = pygame.Rect(WINDOW_WIDTH - 240, y, 100, 40)
+        self.draw_button(btn_conf, "确认", btn_conf.collidepoint(m_pos))
+        self.btn_flip_confirm = btn_conf
 
-        # 确认按钮
-        btn_confirm = pygame.Rect(WINDOW_WIDTH - 240, y, 100, 40)
-        pygame.draw.rect(self.screen, (100, 200, 100), btn_confirm)
-        txt = self.font.render("确认", True, BLACK)
-        self.screen.blit(txt, (btn_confirm.x + 25, btn_confirm.y + 5))
-        self.btn_flip_confirm = btn_confirm
-
-        # 跳过按钮
         btn_skip = pygame.Rect(WINDOW_WIDTH - 130, y, 100, 40)
-        pygame.draw.rect(self.screen, (200, 100, 100), btn_skip)
+        col = (220, 100, 100)
+        if btn_skip.collidepoint(m_pos):
+            col = (240, 120, 120)
+        pygame.draw.rect(self.screen, col, btn_skip, border_radius=10)
         txt = self.font.render("跳过", True, BLACK)
-        self.screen.blit(txt, (btn_skip.x + 25, btn_skip.y + 5))
+        self.screen.blit(txt, (btn_skip.centerx - txt.get_width() // 2,
+                                btn_skip.centery - txt.get_height() // 2))
         self.btn_flip_skip = btn_skip
 
-    def _draw_chain_buttons(self):
-        """绘制连锁翻转按钮"""
+    def draw_chain_buttons(self):
         y = WINDOW_HEIGHT - 50
+        m_pos = pygame.mouse.get_pos()
+        btn_conf = pygame.Rect(WINDOW_WIDTH - 240, y, 100, 40)
+        self.draw_button(btn_conf, "确认", btn_conf.collidepoint(m_pos))
+        self.btn_chain_confirm = btn_conf
 
-        # 确认按钮
-        btn_confirm = pygame.Rect(WINDOW_WIDTH - 240, y, 100, 40)
-        pygame.draw.rect(self.screen, (100, 200, 100), btn_confirm)
-        txt = self.font.render("确认", True, BLACK)
-        self.screen.blit(txt, (btn_confirm.x + 25, btn_confirm.y + 5))
-        self.btn_confirm = btn_confirm
-
-        # 跳过按钮
         btn_skip = pygame.Rect(WINDOW_WIDTH - 130, y, 100, 40)
-        pygame.draw.rect(self.screen, (200, 100, 100), btn_skip)
+        col = (220, 100, 100)
+        if btn_skip.collidepoint(m_pos):
+            col = (240, 120, 120)
+        pygame.draw.rect(self.screen, col, btn_skip, border_radius=10)
         txt = self.font.render("跳过", True, BLACK)
-        self.screen.blit(txt, (btn_skip.x + 25, btn_skip.y + 5))
-        self.btn_skip = btn_skip
+        self.screen.blit(txt, (btn_skip.centerx - txt.get_width() // 2,
+                                btn_skip.centery - txt.get_height() // 2))
+        self.btn_chain_skip = btn_skip
 
-    def handle_click(self, pos: Tuple[int, int]):
-        """处理点击"""
+    def handle_click(self, pos):
+        if self.game.state == Game.ANIMATING:
+            return
+
+        if self.game.state == Game.RULE_INTRO:
+            if hasattr(self, 'next_btn') and self.next_btn.collidepoint(pos):
+                self.rule_page += 1
+            elif hasattr(self, 'prev_btn') and self.prev_btn.collidepoint(pos):
+                self.rule_page -= 1
+            elif hasattr(self, 'back_to_mode_btn') and self.back_to_mode_btn.collidepoint(pos):
+                self.game.state = Game.MODE_SELECT
+                self.rule_page = 0
+            return
+
+        if self.game.state == Game.MODE_SELECT:
+            if hasattr(self, 'pvp_btn') and self.pvp_btn.collidepoint(pos):
+                self.game.set_mode('pvp')
+            elif hasattr(self, 'pve_btn') and self.pve_btn.collidepoint(pos):
+                self.game.set_mode('pve')
+            elif hasattr(self, 'rule_btn') and self.rule_btn.collidepoint(pos):
+                self.game.state = Game.RULE_INTRO
+            return
+
         if self.game.state == Game.GAME_OVER:
             self.game.restart()
             return
 
-        # 检查翻转阶段按钮
         if self.game.state == Game.FLIPPING:
             if hasattr(self, 'btn_flip_confirm') and self.btn_flip_confirm.collidepoint(pos):
                 self.game.apply_flips()
@@ -785,38 +857,36 @@ class GUI:
                 self.game.skip_flips()
                 return
 
-        # 检查连锁翻转按钮
         if self.game.state == Game.CHAIN_FLIPPING:
-            if hasattr(self, 'btn_confirm') and self.btn_confirm.collidepoint(pos):
+            if hasattr(self, 'btn_chain_confirm') and self.btn_chain_confirm.collidepoint(pos):
                 self.game.chain_apply()
                 return
-            if hasattr(self, 'btn_skip') and self.btn_skip.collidepoint(pos):
+            if hasattr(self, 'btn_chain_skip') and self.btn_chain_skip.collidepoint(pos):
                 self.game.chain_skip()
                 return
 
-        board_pos = self.screen_to_pos(pos)
-        if not board_pos:
+        b_pos = self.screen_to_pos(pos)
+        if not b_pos:
             return
 
         if self.game.state == Game.SELECTING:
-            self.game.select_piece(board_pos)
+            self.game.select_piece(b_pos)
         elif self.game.state == Game.MOVING:
-            if not self.game.move_to(board_pos):
-                self.game.select_piece(board_pos)
+            if not self.game.move_to(b_pos):
+                self.game.select_piece(b_pos)
         elif self.game.state == Game.FLIPPING:
-            self.game.select_flip_group(board_pos)
+            self.game.select_flip_group(b_pos)
         elif self.game.state == Game.CHAIN_FLIPPING:
-            self.game.chain_select(board_pos)
+            self.game.chain_select(b_pos)
 
     def handle_right_click(self):
-        """处理右键"""
         self.game.cancel_selection()
 
     def run(self):
-        """主循环"""
-        self.logger.log_turn_start(1)
         running = True
         while running:
+            dt = self.clock.tick(60)
+
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
@@ -826,15 +896,83 @@ class GUI:
                     elif event.button == 3:
                         self.handle_right_click()
 
-            self.draw_board()
-            self.draw_pieces()
-            self.draw_highlight()
-            self.draw_ui()
+            if self.game.state == Game.ANIMATING:
+                if self.anim_type is None:
+                    self.start_animation()
+                else:
+                    done = self.update_animation(dt)
+                    if done:
+                        self.anim_type = None
+
+            if self.game.game_mode == 'pve' and self.game.current_player == 2 and self.game.state != Game.ANIMATING:
+                self.ai_action_timer += dt
+                if self.ai_action_timer >= self.ai_action_delay:
+                    self.ai_action_timer = 0
+                    if self.game.state == Game.SELECTING:
+                        self.game.ai_move()
+                    elif self.game.state == Game.FLIPPING:
+                        self.game.ai_flip()
+                    elif self.game.state == Game.CHAIN_FLIPPING:
+                        self.game.ai_chain()
+            else:
+                self.ai_action_timer = 0
+
+            if self.game.state == Game.RULE_INTRO:
+                self.draw_rule_intro(dt)
+            elif self.game.state == Game.MODE_SELECT:
+                self.draw_mode_select()
+            else:
+                self.draw_board()
+                # 动画状态需要特殊处理
+                if self.game.state == Game.ANIMATING:
+                    # 对于移动动画，先画棋子（跳过原点），再画移动中的棋子
+                    if self.anim_type == "move":
+                        # 先画普通棋子，跳过正在移动的棋子的原位置
+                        self.draw_pieces(skip_pos=self.anim_move_from)
+                        # 再画移动中的棋子
+                        self.draw_moving_animation()
+                    elif self.anim_type == "flip":
+                        self.draw_pieces()
+                        self.draw_flipping_animation()
+                else:
+                    self.draw_pieces()
+                self.draw_highlight()
+                self.draw_ui()
 
             pygame.display.flip()
-            self.clock.tick(30)
 
         pygame.quit()
+
+    def start_animation(self):
+        data = self.game.after_anim_data
+        self.anim_timer = 0
+        if data["type"] == "move":
+            self.anim_type = "move"
+            self.anim_move_from = data["from"]
+            self.anim_move_to = data["to"]
+            self.anim_saved_piece = self.game.board.get_piece(self.anim_move_from)
+            # 不修改棋盘，只在动画绘制时处理
+        elif data["type"] in ("flip", "chain_flip"):
+            self.anim_type = "flip"
+            self.anim_flips = []
+            for pos, new_player in data["flips"]:
+                old_p = self.game.board.get_piece(pos)
+                old_c = PLAYER1_COLOR if old_p == 1 else PLAYER2_COLOR
+                new_c = PLAYER1_COLOR if new_player == 1 else PLAYER2_COLOR
+                self.anim_flips.append((pos, old_c, new_c))
+
+    def update_animation(self, dt):
+        self.anim_timer += dt
+        if self.anim_timer >= self.anim_duration:
+            data = self.game.after_anim_data
+            if data["type"] == "move":
+                self.game.do_real_move(data["from"], data["to"])
+            elif data["type"] == "flip":
+                self.game.do_real_flip(data["flips"], data["reasons"])
+            elif data["type"] == "chain_flip":
+                self.game.do_real_chain_flip(data["flips"], data["reasons"])
+            return True
+        return False
 
 
 def main():
@@ -846,4 +984,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -347,7 +347,7 @@ class SimpleAI {
 
     chooseMove(board) {
         let bestScore = -Infinity;
-        let bestMove = null;
+        let bestMoves = [];
         const fromPositions = board.getValidMoves(this.playerNum);
 
         for (const from of fromPositions) {
@@ -356,11 +356,17 @@ class SimpleAI {
                 const score = this.simulateMove(board, from, to);
                 if (score > bestScore) {
                     bestScore = score;
-                    bestMove = [from, to];
+                    bestMoves = [[from, to]];
+                } else if (score === bestScore) {
+                    bestMoves.push([from, to]);
                 }
             }
         }
-        return bestMove;
+        // 从最优走法中随机选择一个
+        if (bestMoves.length > 0) {
+            return bestMoves[Math.floor(Math.random() * bestMoves.length)];
+        }
+        return null;
     }
 
     simulateMove(board, from, to) {
@@ -405,17 +411,20 @@ class SimpleAI {
     }
 
     chooseFlipGroup(groups) {
-        let bestIdx = 0;
         let bestScore = -1;
+        let bestIndices = [];
         for (let i = 0; i < groups.length; i++) {
             let score = groups[i].flips.length * 10;
             if (groups[i].type === 'b') score += 5;
             if (score > bestScore) {
                 bestScore = score;
-                bestIdx = i;
+                bestIndices = [i];
+            } else if (score === bestScore) {
+                bestIndices.push(i);
             }
         }
-        return bestIdx;
+        // 从最优选项中随机选择
+        return bestIndices[Math.floor(Math.random() * bestIndices.length)];
     }
 
     chooseChainTrigger(chainHandler) {
@@ -469,6 +478,11 @@ class Game {
 
         // AI定时器
         this.aiTimers = [];
+
+        // 动画相关
+        this.animationState = null;
+        this.animationProgress = 0;
+        this.animationFrameId = null;
 
         // 窗口大小变化监听
         window.addEventListener('resize', () => {
@@ -561,6 +575,12 @@ class Game {
     undo() {
         // 清除所有AI定时器
         this.clearAITimers();
+
+        // 停止动画
+        if (this.animationFrameId) {
+            cancelAnimationFrame(this.animationFrameId);
+        }
+        this.animationState = null;
 
         if (this.history.length <= 1) return;
 
@@ -698,6 +718,9 @@ class Game {
     handleClick(pos) {
         if (this.state === STATE.MODE_SELECT || this.state === STATE.RULE_INTRO) return;
 
+        // 动画期间不能操作
+        if (this.animationState) return;
+
         // PVE模式下，如果是AI的回合，玩家不能操作
         if (this.gameMode === 'pve' && this.currentPlayer === 2) return;
 
@@ -749,56 +772,119 @@ class Game {
 
     doMove(from, to) {
         this.history.push(this.saveState());
+
+        // 播放移动动画
+        this.animationState = {
+            type: 'move',
+            from: from,
+            to: to,
+            player: this.board.getPiece(from),
+            duration: 300,
+            startTime: performance.now()
+        };
+
+        // 先在 board 上移动，这样动画期间棋盘状态已经是新的
         this.board.movePiece(from, to);
-        this.pendingFlipGroups = this.flipRule.getFlipGroupsAfterMove(this.currentPlayer, to);
-        this.selectedFlipGroup = null;
         this.selectedPos = to;
 
-        if (this.pendingFlipGroups.length > 0) {
-            this.state = STATE.FLIPPING;
-        } else {
-            this.endTurn();
-        }
-        this.render();
+        // 启动动画
+        this.startAnimation(() => {
+            // 动画完成后检查翻转
+            this.pendingFlipGroups = this.flipRule.getFlipGroupsAfterMove(this.currentPlayer, to);
+            this.selectedFlipGroup = null;
+
+            if (this.pendingFlipGroups.length > 0) {
+                this.state = STATE.FLIPPING;
+                // 如果是AI的回合，自动翻转
+                if (this.gameMode === 'pve' && this.currentPlayer === 2) {
+                    this.doAIFlip();
+                }
+            } else {
+                this.endTurn();
+            }
+            this.render();
+        });
     }
 
     confirmAction() {
         if (this.state === STATE.FLIPPING && this.selectedFlipGroup !== null) {
             this.history.push(this.saveState());
             const group = this.pendingFlipGroups[this.selectedFlipGroup];
-            for (const [pos, _] of group.flips) {
-                this.board.setPiece(pos, this.currentPlayer);
-            }
-            if (this.chainHandler.startChainFlip(this.currentPlayer)) {
-                this.state = STATE.CHAIN_FLIPPING;
-            } else {
-                this.endTurn();
-            }
-        } else if (this.state === STATE.CHAIN_FLIPPING && this.chainHandler.selectedTrigger !== null && this.chainHandler.selectedGroup !== null) {
-            this.history.push(this.saveState());
-            const groups = this.chainHandler.availableGroups;
-            const group = groups[this.chainHandler.selectedGroup];
+
+            // 播放翻转动画
+            const flips = group.flips.map(([pos, _]) => ({
+                pos: pos,
+                fromPlayer: this.board.getPiece(pos)
+            }));
+
+            // 先设置棋子
             for (const [pos, _] of group.flips) {
                 this.board.setPiece(pos, this.currentPlayer);
             }
 
-            const remainingGroups = this.flipRule.getFlipGroupsForTrigger(this.currentPlayer, this.chainHandler.selectedTrigger);
-            if (remainingGroups.length > 0) {
-                this.chainHandler.availableGroups = remainingGroups;
-                this.chainHandler.selectedGroup = null;
-                this.chainHandler.previewFlips = remainingGroups[0].flips.map(f => f[0]);
-            } else {
-                this.chainHandler.selectedTrigger = null;
-                this.chainHandler.availableGroups = [];
-                this.chainHandler.selectedGroup = null;
-                this.chainHandler.previewFlips = [];
-                this.chainHandler.availableTriggers = this.flipRule.getTriggers(this.currentPlayer);
-                if (this.chainHandler.availableTriggers.length === 0) {
+            this.animationState = {
+                type: 'flip',
+                flips: flips,
+                toPlayer: this.currentPlayer,
+                duration: 400,
+                startTime: performance.now()
+            };
+
+            this.startAnimation(() => {
+                if (this.chainHandler.startChainFlip(this.currentPlayer)) {
+                    this.state = STATE.CHAIN_FLIPPING;
+                    // 如果是AI的回合，开始连锁翻转
+                    if (this.gameMode === 'pve' && this.currentPlayer === 2) {
+                        const timer = setTimeout(() => this.doAIChain(), 500);
+                        this.aiTimers.push(timer);
+                    }
+                } else {
                     this.endTurn();
                 }
+                this.render();
+            });
+
+        } else if (this.state === STATE.CHAIN_FLIPPING && this.chainHandler.selectedTrigger !== null && this.chainHandler.selectedGroup !== null) {
+            this.history.push(this.saveState());
+            const groups = this.chainHandler.availableGroups;
+            const group = groups[this.chainHandler.selectedGroup];
+
+            // 播放翻转动画
+            const flips = group.flips.map(([pos, _]) => ({
+                pos: pos,
+                fromPlayer: this.board.getPiece(pos)
+            }));
+
+            // 先设置棋子
+            for (const [pos, _] of group.flips) {
+                this.board.setPiece(pos, this.currentPlayer);
             }
+
+            this.animationState = {
+                type: 'flip',
+                flips: flips,
+                toPlayer: this.currentPlayer,
+                duration: 400,
+                startTime: performance.now()
+            };
+
+            this.startAnimation(() => {
+                // 每次翻转后，重新全局扫描所有可能的触发点（包括刚翻转的棋子）
+                if (this.chainHandler.startChainFlip(this.currentPlayer)) {
+                    // 还有可翻转的内容，保持连锁状态
+                    this.state = STATE.CHAIN_FLIPPING;
+                    // 如果是AI的回合，继续连锁翻转
+                    if (this.gameMode === 'pve' && this.currentPlayer === 2) {
+                        const timer = setTimeout(() => this.doAIChain(), 500);
+                        this.aiTimers.push(timer);
+                    }
+                } else {
+                    // 没有任何可翻转的了，结束回合
+                    this.endTurn();
+                }
+                this.render();
+            });
         }
-        this.render();
     }
 
     skipAction() {
@@ -831,7 +917,7 @@ class Game {
         this.selectedPos = null;
 
         if (this.gameMode === 'pve' && this.currentPlayer === 2) {
-            const timer = setTimeout(() => this.doAIMove(), 600);
+            const timer = setTimeout(() => this.doAIMove(), 800);
             this.aiTimers.push(timer);
         }
     }
@@ -848,25 +934,21 @@ class Game {
 
         const timer = setTimeout(() => {
             this.doMove(from, to);
-            if (this.state === STATE.FLIPPING) {
-                const flipTimer = setTimeout(() => this.doAIFlip(), 400);
-                this.aiTimers.push(flipTimer);
-            }
-        }, 400);
+        }, 600);
         this.aiTimers.push(timer);
     }
 
     doAIFlip() {
         if (this.state !== STATE.FLIPPING) return;
 
-        const groupIdx = this.ai.chooseFlipGroup(this.pendingFlipGroups);
-        this.selectedFlipGroup = groupIdx;
-        this.confirmAction();
-
-        if (this.state === STATE.CHAIN_FLIPPING) {
-            const timer = setTimeout(() => this.doAIChain(), 400);
-            this.aiTimers.push(timer);
-        }
+        const timer = setTimeout(() => {
+            const groupIdx = this.ai.chooseFlipGroup(this.pendingFlipGroups);
+            this.selectedFlipGroup = groupIdx;
+            this.confirmAction();
+            // 注意：不要在这里继续调用 doAIChain()
+            // 动画完成后会在 confirmAction 的回调中处理
+        }, 600);
+        this.aiTimers.push(timer);
     }
 
     doAIChain() {
@@ -874,22 +956,45 @@ class Game {
 
         const [trigger, groupIdx] = this.ai.chooseChainTrigger(this.chainHandler);
         if (trigger === null) {
-            this.skipAction();
+            const skipTimer = setTimeout(() => this.skipAction(), 500);
+            this.aiTimers.push(skipTimer);
             return;
         }
 
         this.chainHandler.selectTrigger(trigger);
         this.chainHandler.selectedGroup = groupIdx;
         this.confirmAction();
+        // 注意：不要在这里继续调用 doAIChain()
+        // 动画完成后会在 confirmAction 的回调中处理
+    }
 
-        if (this.state === STATE.CHAIN_FLIPPING) {
-            const timer = setTimeout(() => this.doAIChain(), 400);
-            this.aiTimers.push(timer);
-        }
+    startAnimation(onComplete) {
+        const animate = (now) => {
+            if (!this.animationState) {
+                return;
+            }
+            const elapsed = now - this.animationState.startTime;
+            this.animationProgress = Math.min(elapsed / this.animationState.duration, 1);
+
+            this.render();
+
+            if (this.animationProgress < 1) {
+                this.animationFrameId = requestAnimationFrame(animate);
+            } else {
+                this.animationState = null;
+                this.animationFrameId = null;
+                onComplete();
+            }
+        };
+        this.animationFrameId = requestAnimationFrame(animate);
     }
 
     restart() {
         this.clearAITimers();
+        if (this.animationFrameId) {
+            cancelAnimationFrame(this.animationFrameId);
+        }
+        this.animationState = null;
         this.board = new Board();
         this.flipRule = new FlipRule(this.board);
         this.chainHandler = new ChainFlipHandler(this.board, this.flipRule);
@@ -958,22 +1063,106 @@ class Game {
 
     drawPieces() {
         const ctx = this.ctx;
+
+        // 先绘制所有普通棋子
         for (let y = 0; y < GRID_SIZE; y++) {
             for (let x = 0; x < GRID_SIZE; x++) {
-                const p = this.board.getPiece([x, y]);
-                if (p !== 0) {
-                    const color = p === 1 ? PLAYER1_COLOR : PLAYER2_COLOR;
-                    const [cx, cy] = this.posToScreen([x, y]);
-                    ctx.beginPath();
-                    ctx.arc(cx, cy, Math.max(12, this.cellSize * 0.3), 0, Math.PI * 2);
-                    ctx.fillStyle = color;
-                    ctx.fill();
-                    ctx.strokeStyle = '#000';
-                    ctx.lineWidth = 2;
-                    ctx.stroke();
+                const pos = [x, y];
+                let skip = false;
+
+                // 如果是动画中的棋子，先跳过，后面单独绘制
+                if (this.animationState) {
+                    if (this.animationState.type === 'move') {
+                        // 移动动画：跳过起点和终点
+                        if ((pos[0] === this.animationState.from[0] && pos[1] === this.animationState.from[1]) ||
+                            (pos[0] === this.animationState.to[0] && pos[1] === this.animationState.to[1])) {
+                            skip = true;
+                        }
+                    } else if (this.animationState.type === 'flip') {
+                        // 翻转动画：跳过正在翻转的棋子
+                        for (const f of this.animationState.flips) {
+                            if (pos[0] === f.pos[0] && pos[1] === f.pos[1]) {
+                                skip = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (!skip) {
+                    const p = this.board.getPiece(pos);
+                    if (p !== 0) {
+                        this.drawPieceAt(pos, p, 1);
+                    }
                 }
             }
         }
+
+        // 绘制动画中的棋子
+        if (this.animationState) {
+            const t = this.animationProgress;
+
+            if (this.animationState.type === 'move') {
+                const [fx, fy] = this.posToScreen(this.animationState.from);
+                const [tx, ty] = this.posToScreen(this.animationState.to);
+                // 使用缓动函数让动画更自然
+                const easeT = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+                const cx = fx + (tx - fx) * easeT;
+                const cy = fy + (ty - fy) * easeT;
+                const color = this.animationState.player === 1 ? PLAYER1_COLOR : PLAYER2_COLOR;
+                const radius = Math.max(12, this.cellSize * 0.3);
+                ctx.beginPath();
+                ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+                ctx.fillStyle = color;
+                ctx.fill();
+                ctx.strokeStyle = '#000';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+
+            } else if (this.animationState.type === 'flip') {
+                for (const f of this.animationState.flips) {
+                    const fromColor = f.fromPlayer === 1 ? PLAYER1_COLOR : PLAYER2_COLOR;
+                    const toColor = this.animationState.toPlayer === 1 ? PLAYER1_COLOR : PLAYER2_COLOR;
+                    // 翻转效果：先缩小到0，再放大
+                    let scale;
+                    let color;
+                    if (t < 0.5) {
+                        scale = 1 - t * 2;
+                        color = fromColor;
+                    } else {
+                        scale = (t - 0.5) * 2;
+                        color = toColor;
+                    }
+                    const [cx, cy] = this.posToScreen(f.pos);
+                    const baseRadius = Math.max(12, this.cellSize * 0.3);
+                    const radius = baseRadius * scale;
+
+                    if (radius > 0.5) {
+                        ctx.beginPath();
+                        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+                        ctx.fillStyle = color;
+                        ctx.fill();
+                        ctx.strokeStyle = '#000';
+                        ctx.lineWidth = 2;
+                        ctx.stroke();
+                    }
+                }
+            }
+        }
+    }
+
+    drawPieceAt(pos, player, scale = 1) {
+        const ctx = this.ctx;
+        const color = player === 1 ? PLAYER1_COLOR : PLAYER2_COLOR;
+        const [cx, cy] = this.posToScreen(pos);
+        const radius = Math.max(12, this.cellSize * 0.3) * scale;
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.fill();
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 2;
+        ctx.stroke();
     }
 
     drawHighlight() {

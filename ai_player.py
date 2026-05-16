@@ -1,6 +1,7 @@
 from typing import List, Tuple, Optional
 from board import Board, FlipRule, ChainFlipHandler
 import copy
+import random
 
 class AIPlayer:
     """AI玩家 - 使用 Minimax 算法 + Alpha-Beta 剪枝"""
@@ -16,7 +17,7 @@ class AIPlayer:
         返回: (from_pos, to_pos)
         """
         best_score = -float('inf')
-        best_move = None
+        best_moves = []
 
         # 枚举所有己方棋子
         from_positions = board.get_valid_moves(self.player_num)
@@ -29,9 +30,14 @@ class AIPlayer:
                 score = self._simulate_move_and_evaluate(board, from_pos, to_pos)
                 if score > best_score:
                     best_score = score
-                    best_move = (from_pos, to_pos)
+                    best_moves = [(from_pos, to_pos)]
+                elif score == best_score:
+                    best_moves.append((from_pos, to_pos))
 
-        return best_move
+        # 从最优走法中随机选择
+        if best_moves:
+            return random.choice(best_moves)
+        return None
 
     def _simulate_move_and_evaluate(self, board: Board, from_pos: Tuple[int, int], to_pos: Tuple[int, int]) -> float:
         """模拟走棋并评估，包含立即翻转的处理"""
@@ -222,16 +228,19 @@ class AIPlayer:
         选择翻转组
         返回: 选中的组索引
         """
-        best_idx = 0
         best_score = -1
+        best_indices = []
         for i, group in enumerate(groups):
             score = len(group["flips"]) * 10
             if group["type"] == "b":
                 score += 5
             if score > best_score:
                 best_score = score
-                best_idx = i
-        return best_idx
+                best_indices = [i]
+            elif score == best_score:
+                best_indices.append(i)
+        # 从最优选项中随机选择
+        return random.choice(best_indices)
 
     def choose_chain_trigger(self, chain_handler: ChainFlipHandler) -> Tuple[Optional[Tuple[int, int]], Optional[int]]:
         """
@@ -243,8 +252,7 @@ class AIPlayer:
             return None, None
 
         best_score = -1
-        best_trigger = None
-        best_group_idx = 0
+        best_options = []
 
         for t in triggers:
             chain_handler.select_trigger(t)
@@ -259,7 +267,11 @@ class AIPlayer:
 
             if score > best_score:
                 best_score = score
-                best_trigger = t
-                best_group_idx = group_idx
+                best_options = [(t, group_idx)]
+            elif score == best_score:
+                best_options.append((t, group_idx))
 
-        return best_trigger, best_group_idx
+        # 从最优选项中随机选择
+        if best_options:
+            return random.choice(best_options)
+        return None, None

@@ -452,7 +452,8 @@ class GUI:
             "棋盘为7x7的交叉点，双方各14个棋子",
             "红方先手，轮流走棋",
             "棋子沿横竖或斜线走一格",
-            "斜线：奇数行右下斜，偶数行右上斜"
+            "斜线：奇数行右下斜，偶数行右上斜",
+            "中间两行（第3、4行）是X形，两个方向都可以走！"
         ]
         y = 100
         for line in desc:
@@ -610,13 +611,25 @@ class GUI:
 
         for gy in range(GRID_SIZE - 1):
             for gx in range(GRID_SIZE - 1):
-                if gy % 2 == 1:
+                # 中间两行（第2、3行）画X形两个方向
+                if gy == 2 or gy == 3:
+                    # 右下斜 \
                     s = (x + gx * cell, y + gy * cell)
                     e = (x + (gx + 1) * cell, y + (gy + 1) * cell)
-                else:
+                    pygame.draw.line(self.screen, BLACK, s, e, 1)
+                    # 右上斜 /
                     s = (x + (gx + 1) * cell, y + gy * cell)
                     e = (x + gx * cell, y + (gy + 1) * cell)
-                pygame.draw.line(self.screen, BLACK, s, e, 1)
+                    pygame.draw.line(self.screen, BLACK, s, e, 1)
+                else:
+                    # 普通行只画一个方向
+                    if gy % 2 == 1:
+                        s = (x + gx * cell, y + gy * cell)
+                        e = (x + (gx + 1) * cell, y + (gy + 1) * cell)
+                    else:
+                        s = (x + (gx + 1) * cell, y + gy * cell)
+                        e = (x + gx * cell, y + (gy + 1) * cell)
+                    pygame.draw.line(self.screen, BLACK, s, e, 1)
 
         # 画棋子（注意数组索引是[行][列]=[y][x]）
         for gy in range(GRID_SIZE):
@@ -641,13 +654,25 @@ class GUI:
 
         for gy in range(GRID_SIZE - 1):
             for gx in range(GRID_SIZE - 1):
-                if gy % 2 == 1:
+                # 中间两行（第2、3行）画X形两个方向
+                if gy == 2 or gy == 3:
+                    # 右下斜 \
                     s = self.pos_to_screen((gx, gy))
                     e = self.pos_to_screen((gx + 1, gy + 1))
-                else:
+                    pygame.draw.line(self.screen, BLACK, s, e, 1)
+                    # 右上斜 /
                     s = self.pos_to_screen((gx + 1, gy))
                     e = self.pos_to_screen((gx, gy + 1))
-                pygame.draw.line(self.screen, BLACK, s, e, 1)
+                    pygame.draw.line(self.screen, BLACK, s, e, 1)
+                else:
+                    # 普通行只画一个方向
+                    if gy % 2 == 1:
+                        s = self.pos_to_screen((gx, gy))
+                        e = self.pos_to_screen((gx + 1, gy + 1))
+                    else:
+                        s = self.pos_to_screen((gx + 1, gy))
+                        e = self.pos_to_screen((gx, gy + 1))
+                    pygame.draw.line(self.screen, BLACK, s, e, 1)
 
         for xc in range(GRID_SIZE):
             txt = self.small_font.render(str(xc), True, BLACK)

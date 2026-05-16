@@ -47,8 +47,11 @@ class Board:
             return False
 
         # 确定这两个点属于哪个格子的斜线
-        # gy是斜线所在的行（看绘制代码，y循环是斜线的行）
         gy = min(fy, ty)
+
+        # 中间两行（第2、3行）是X形，两个方向斜线都允许
+        if gy == 2 or gy == 3:
+            return True
 
         # 检查是否有对应斜线（与draw_board一致）
         if gy % 2 == 1:

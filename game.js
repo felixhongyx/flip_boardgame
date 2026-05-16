@@ -470,14 +470,24 @@ class Game {
         // AI定时器
         this.aiTimers = [];
 
+        // 窗口大小变化监听
+        window.addEventListener('resize', () => {
+            this.resizeCanvas();
+            this.render();
+        });
+
         this.bindEvents();
         this.render();
     }
 
     resizeCanvas() {
-        this.canvas.width = 400;
-        this.canvas.height = 400;
-        this.cellSize = (400 - MARGIN * 2) / (GRID_SIZE - 1);
+        const container = document.getElementById('canvas-container');
+        const containerWidth = container ? container.clientWidth : 400;
+        const canvasSize = Math.min(containerWidth, 400);
+
+        this.canvas.width = canvasSize;
+        this.canvas.height = canvasSize;
+        this.cellSize = (canvasSize - MARGIN * 2) / (GRID_SIZE - 1);
         this.margin = MARGIN;
     }
 
@@ -487,8 +497,10 @@ class Game {
 
     screenToPos(screenPos) {
         const rect = this.canvas.getBoundingClientRect();
-        const sx = screenPos[0] - rect.left;
-        const sy = screenPos[1] - rect.top;
+        const scaleX = this.canvas.width / rect.width;
+        const scaleY = this.canvas.height / rect.height;
+        const sx = (screenPos[0] - rect.left) * scaleX;
+        const sy = (screenPos[1] - rect.top) * scaleY;
         const x = Math.round((sx - this.margin) / this.cellSize);
         const y = Math.round((sy - this.margin) / this.cellSize);
         if (x >= 0 && x < GRID_SIZE && y >= 0 && y < GRID_SIZE) {
@@ -631,7 +643,12 @@ class Game {
         document.getElementById('mode-select').style.display = 'none';
         document.getElementById('rule-intro').style.display = 'none';
         document.getElementById('game-area').style.display = 'block';
-        this.render();
+
+        // 重新调整画布大小
+        setTimeout(() => {
+            this.resizeCanvas();
+            this.render();
+        }, 50);
     }
 
     showRules() {

@@ -17,41 +17,49 @@
             font-family: Arial, sans-serif;
             background: #f5deb3;
             text-align: center;
-            padding: 20px;
+            padding: 10px;
         }
         h1 {
             color: #333;
-            margin-bottom: 15px;
-            font-size: 28px;
+            margin-bottom: 10px;
+            font-size: 24px;
+        }
+        #canvas-container {
+            width: 100%;
+            max-width: 400px;
+            margin: 0 auto;
         }
         canvas {
             border: 2px solid #333;
             border-radius: 5px;
             background: #f5deb3;
+            width: 100%;
+            height: auto;
         }
         .ui-bar {
             display: flex;
             justify-content: space-between;
             max-width: 400px;
-            margin: 10px auto;
+            width: 100%;
+            margin: 8px auto;
             padding: 8px 12px;
             background: rgba(255,255,255,0.6);
             border-radius: 8px;
-            font-size: 16px;
+            font-size: 14px;
         }
         .button-group {
-            margin: 8px 0;
-            min-height: 40px;
+            margin: 6px 0;
+            min-height: 36px;
         }
         button {
-            padding: 8px 16px;
-            font-size: 14px;
+            padding: 8px 14px;
+            font-size: 13px;
             border: none;
             border-radius: 6px;
             cursor: pointer;
             background: #64c864;
             color: #000;
-            margin: 0 4px;
+            margin: 2px 3px;
         }
         button:hover {
             background: #78dc78;
@@ -166,7 +174,9 @@
     <!-- 游戏区域 -->
     <div id="game-area" style="display: none;">
         <h1>翻转棋</h1>
-        <canvas id="board" width="400" height="400"></canvas>
+        <div id="canvas-container">
+            <canvas id="board" width="400" height="400"></canvas>
+        </div>
         <div class="ui-bar">
             <span id="current-turn"></span>
             <span id="score"></span>

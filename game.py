@@ -105,33 +105,148 @@ class Game:
         if mode == 'pve':
             self.ai_player = AIPlayer(2)
         self.state = Game.SELECTING
-        self.history = []  # 重置历史
+        self.history = [self._make_state()]  # 保存初始状态
         self.logger.log_turn_start(1)
 
-    def save_state(self):
-        """保存当前游戏状态到历史"""
-        state = {
+    def _make_state(self):
+        """创建当前状态的完整副本"""
+        return {
             'board': [row[:] for row in self.board.grid],
             'current_player': self.current_player,
             'state': self.state,
+            'selected_pos': self.selected_pos,
+            'pending_flips': self.pending_flips.copy(),
+            'pending_flip_groups': [
+                {
+                    'type': g['type'],
+                    'dir': g['dir'],
+                    'flips': [(p, r) for p, r in g['flips']]
+                } for g in self.pending_flip_groups
+            ],
+            'selected_flip_group': self.selected_flip_group,
+            'chain_player': self.chain_handler.player,
+            'chain_available_triggers': [t for t in self.chain_handler.available_triggers],
+            'chain_selected_trigger': self.chain_handler.selected_trigger,
+            'chain_preview_flips': [p for p in self.chain_handler.preview_flips],
+            'chain_available_groups': [
+                {
+                    'type': g['type'],
+                    'dir': g['dir'],
+                    'flips': [(p, r) for p, r in g['flips']]
+                } for g in self.chain_handler.available_groups
+            ],
+            'chain_selected_group': self.chain_handler.selected_group,
+            'game_mode': self.game_mode,
         }
-        self.history.append(state)
 
-    def undo(self):
-        """悔棋：恢复到上一个状态"""
-        if not self.history:
-            return False
-        state = self.history.pop()
-        self.board.grid = state['board']
+    def _restore_state(self, state):
+        """从状态恢复"""
+        self.board.grid = [row[:] for row in state['board']]
         self.current_player = state['current_player']
         self.state = state['state']
+        self.selected_pos = state['selected_pos']
+        self.pending_flips = state['pending_flips'].copy()
+        self.pending_flip_groups = [
+            {
+                'type': g['type'],
+                'dir': g['dir'],
+                'flips': [(p, r) for p, r in g['flips']]
+            } for g in state['pending_flip_groups']
+        ]
+        self.selected_flip_group = state['selected_flip_group']
+        self.chain_handler = ChainFlipHandler(self.board, self.flip_rule)
+        self.chain_handler.player = state['chain_player']
+        self.chain_handler.available_triggers = [t for t in state['chain_available_triggers']]
+        self.chain_handler.selected_trigger = state['chain_selected_trigger']
+        self.chain_handler.preview_flips = [p for p in state['chain_preview_flips']]
+        self.chain_handler.available_groups = [
+            {
+                'type': g['type'],
+                'dir': g['dir'],
+                'flips': [(p, r) for p, r in g['flips']]
+            } for g in state['chain_available_groups']
+        ]
+        self.chain_handler.selected_group = state['chain_selected_group']
+        # 恢复游戏模式
+        if 'game_mode' in state:
+            self.game_mode = state['game_mode']
+            if self.game_mode == 'pve' and self.ai_player is None:
+                self.ai_player = AIPlayer(2)
+
+    def save_state(self):
+        """保存当前游戏状态到历史"""
+        self.history.append(self._make_state())
+
+    def undo(self):
+        """悔棋：PVE模式下回退两步，PVP模式下回退一步"""
+        if len(self.history) <= 1:
+            return False
+
+        # PVE模式下要回退到上一个玩家1的状态
+        if self.game_mode == 'pve':
+            # 先找到上一个玩家1的SELECTING或MOVING状态
+            target_idx = -1
+            for i in range(len(self.history)-2, -1, -1):
+                s = self.history[i]
+                if s['current_player'] == 1 and s['state'] in (Game.SELECTING, Game.MOVING):
+                    target_idx = i
+                    break
+            if target_idx >= 0:
+                self.history = self.history[:target_idx+1]
+                self._restore_state(self.history[-1])
+                return True
+            else:
+                # 没找到就回退到初始
+                self._restore_state(self.history[0])
+                self.history = [self.history[0]]
+                return True
+        else:
+            # PVP模式下回退一步
+            self.history.pop()
+            self._restore_state(self.history[-1])
+            return True
+
+    def restart(self):
+        """重新开始游戏"""
+        self.logger.log("[DEBUG] restart called")
+        mode = self.game_mode
+        # 手动重置，不调用__init__
+        self.board = Board()
+        self.flip_rule = FlipRule(self.board)
+        self.chain_handler = ChainFlipHandler(self.board, self.flip_rule)
+        self.current_player = 1
+        self.state = Game.SELECTING
         self.selected_pos = None
         self.pending_flips = []
         self.pending_flip_groups = []
         self.selected_flip_group = None
-        # 重置chain handler
+        self.history = []
+        self.after_anim_state = None
+        self.after_anim_data = None
+        # 重新设置模式
+        if mode:
+            self.set_mode(mode)
+        else:
+            self.state = Game.MODE_SELECT
+
+    def back_to_menu(self):
+        """返回主菜单"""
+        self.logger.log("[DEBUG] back_to_menu called")
+        # 手动重置到主菜单
+        self.board = Board()
+        self.flip_rule = FlipRule(self.board)
         self.chain_handler = ChainFlipHandler(self.board, self.flip_rule)
-        return True
+        self.current_player = 1
+        self.state = Game.MODE_SELECT
+        self.selected_pos = None
+        self.pending_flips = []
+        self.pending_flip_groups = []
+        self.selected_flip_group = None
+        self.game_mode = None
+        self.ai_player = None
+        self.history = []
+        self.after_anim_state = None
+        self.after_anim_data = None
 
     def select_piece(self, pos: Tuple[int, int]) -> bool:
         if self.state != Game.SELECTING:
@@ -150,6 +265,9 @@ class Game:
         if pos not in self.board.get_valid_moves(self.current_player, self.selected_pos):
             return False
 
+        # 在启动动画前保存状态！
+        self.save_state()
+
         from_pos = self.selected_pos
         self.after_anim_data = {
             "type": "move",
@@ -161,7 +279,6 @@ class Game:
         return True
 
     def do_real_move(self, from_pos, to_pos):
-        self.save_state()
         self.board.move_piece(from_pos, to_pos)
         self.logger.log_move(self.current_player, from_pos, to_pos)
         self.logger.log_board_state(self.board.grid)
@@ -239,6 +356,9 @@ class Game:
         if self.selected_flip_group is None:
             return
 
+        # 在启动动画前保存状态！
+        self.save_state()
+
         group = self.pending_flip_groups[self.selected_flip_group]
         flip_list = [(pos, self.current_player) for pos, reason in group["flips"]]
         reasons = [reason for pos, reason in group["flips"]]
@@ -251,7 +371,6 @@ class Game:
         self.state = Game.ANIMATING
 
     def do_real_flip(self, flip_list, reasons):
-        self.save_state()
         for i, (pos, player) in enumerate(flip_list):
             self.board.set_piece(pos, player)
             self.logger.log_flip(player, pos, reasons[i])
@@ -270,6 +389,8 @@ class Game:
     def skip_flips(self):
         if self.state != Game.FLIPPING:
             return
+        # 跳过前先保存状态
+        self.save_state()
         self.logger.log(f"玩家{self.current_player} 跳过翻转")
         self.pending_flips = []
         self.pending_flip_groups = []
@@ -290,6 +411,9 @@ class Game:
         if self.chain_handler.selected_trigger is None or self.chain_handler.selected_group is None:
             return
 
+        # 在启动动画前保存状态！
+        self.save_state()
+
         # 先保存要翻转的数据用于动画
         groups = self.chain_handler.available_groups
         group = groups[self.chain_handler.selected_group]
@@ -306,7 +430,6 @@ class Game:
 
     def do_real_chain_flip(self, flip_list, reasons):
         # 用ChainFlipHandler来处理实际的逻辑，它会正确更新状态
-        self.save_state()
         for i, (pos, player) in enumerate(flip_list):
             self.board.set_piece(pos, player)
             self.logger.log_flip(player, pos, reasons[i])
@@ -336,6 +459,8 @@ class Game:
     def chain_skip(self):
         if self.state != Game.CHAIN_FLIPPING:
             return
+        # 跳过前先保存状态
+        self.save_state()
         self.logger.log_chain_flip_choice(self.current_player, "跳过")
         self._end_turn()
 
@@ -372,8 +497,6 @@ class Game:
         self.selected_pos = None
         self.logger.log_turn_start(self.current_player)
 
-    def restart(self):
-        self.__init__(self.logger)
 
 
 class GUI:
@@ -793,7 +916,7 @@ class GUI:
             txt_color = BLACK
         elif self.game.state == Game.GAME_OVER:
             winner = 2 if self.game.board.count_pieces(1) == 0 else 1
-            msg = f"游戏结束! 玩家{winner}获胜! 点击重新开始"
+            msg = f"游戏结束! 玩家{winner}获胜!"
             txt_color = BLACK
         else:
             col = PLAYER1_COLOR if self.game.current_player == 1 else PLAYER2_COLOR
@@ -829,6 +952,9 @@ class GUI:
         elif self.game.state == Game.CHAIN_FLIPPING:
             self.draw_chain_buttons()
 
+        # 绘制游戏操作按钮（始终显示在底部）
+        self.draw_game_buttons()
+
     def draw_flip_buttons(self):
         y = WINDOW_HEIGHT - 50
         m_pos = pygame.mouse.get_pos()
@@ -863,6 +989,49 @@ class GUI:
                                 btn_skip.centery - txt.get_height() // 2))
         self.btn_chain_skip = btn_skip
 
+    def draw_game_buttons(self):
+        m_pos = pygame.mouse.get_pos()
+
+        # 悔棋按钮（左下角，游戏结束时不显示）
+        if self.game.state not in (Game.ANIMATING, Game.GAME_OVER) and len(self.game.history) > 1:
+            # PVE模式只在玩家1回合显示
+            if self.game.game_mode != 'pve' or (self.game.current_player == 1 and self.game.state in (Game.SELECTING, Game.MOVING)):
+                btn_undo = pygame.Rect(20, WINDOW_HEIGHT - 50, 80, 40)
+                self.draw_button(btn_undo, "悔棋", btn_undo.collidepoint(m_pos))
+                self.btn_undo = btn_undo
+
+        # 重开和返回主菜单按钮（中间偏右，与翻转按钮不重叠）
+        if self.game.state in (Game.FLIPPING, Game.CHAIN_FLIPPING):
+            # 翻转状态下，按钮放更下面
+            btn_restart = pygame.Rect(WINDOW_WIDTH // 2 - 110, WINDOW_HEIGHT - 50, 100, 40)
+            self.draw_button(btn_restart, "重新开始", btn_restart.collidepoint(m_pos))
+            self.btn_restart = btn_restart
+
+            btn_menu = pygame.Rect(WINDOW_WIDTH // 2 + 10, WINDOW_HEIGHT - 50, 100, 40)
+            col = (200, 200, 100)
+            if btn_menu.collidepoint(m_pos):
+                col = (220, 220, 120)
+            pygame.draw.rect(self.screen, col, btn_menu, border_radius=10)
+            txt = self.small_font.render("返回主菜单", True, BLACK)
+            self.screen.blit(txt, (btn_menu.centerx - txt.get_width() // 2,
+                                    btn_menu.centery - txt.get_height() // 2))
+            self.btn_menu = btn_menu
+        elif self.game.state not in (Game.ANIMATING, Game.MODE_SELECT, Game.RULE_INTRO):
+            # 正常游戏状态下，按钮放右下角
+            btn_restart = pygame.Rect(WINDOW_WIDTH - 240, WINDOW_HEIGHT - 50, 100, 40)
+            self.draw_button(btn_restart, "重新开始", btn_restart.collidepoint(m_pos))
+            self.btn_restart = btn_restart
+
+            btn_menu = pygame.Rect(WINDOW_WIDTH - 130, WINDOW_HEIGHT - 50, 100, 40)
+            col = (200, 200, 100)
+            if btn_menu.collidepoint(m_pos):
+                col = (220, 220, 120)
+            pygame.draw.rect(self.screen, col, btn_menu, border_radius=10)
+            txt = self.small_font.render("返回主菜单", True, BLACK)
+            self.screen.blit(txt, (btn_menu.centerx - txt.get_width() // 2,
+                                    btn_menu.centery - txt.get_height() // 2))
+            self.btn_menu = btn_menu
+
     def handle_click(self, pos):
         if self.game.state == Game.ANIMATING:
             return
@@ -887,9 +1056,19 @@ class GUI:
             return
 
         if self.game.state == Game.GAME_OVER:
+            # 游戏结束时的按钮
+            if hasattr(self, 'btn_restart') and self.btn_restart.collidepoint(pos):
+                self.game.logger.log("[DEBUG] Clicked restart in game over")
+                self.game.restart()
+                return
+            if hasattr(self, 'btn_menu') and self.btn_menu.collidepoint(pos):
+                self.game.logger.log("[DEBUG] Clicked menu in game over")
+                self.game.back_to_menu()
+                return
             self.game.restart()
             return
 
+        # 翻转和连锁翻转状态的按钮优先
         if self.game.state == Game.FLIPPING:
             if hasattr(self, 'btn_flip_confirm') and self.btn_flip_confirm.collidepoint(pos):
                 self.game.apply_flips()
@@ -905,6 +1084,20 @@ class GUI:
             if hasattr(self, 'btn_chain_skip') and self.btn_chain_skip.collidepoint(pos):
                 self.game.chain_skip()
                 return
+
+        # 游戏操作按钮（悔棋、重开、返回菜单）
+        if hasattr(self, 'btn_undo') and self.btn_undo.collidepoint(pos):
+            self.game.logger.log("[DEBUG] Clicked undo")
+            self.game.undo()
+            return
+        if hasattr(self, 'btn_restart') and self.btn_restart.collidepoint(pos):
+            self.game.logger.log("[DEBUG] Clicked restart")
+            self.game.restart()
+            return
+        if hasattr(self, 'btn_menu') and self.btn_menu.collidepoint(pos):
+            self.game.logger.log("[DEBUG] Clicked menu")
+            self.game.back_to_menu()
+            return
 
         b_pos = self.screen_to_pos(pos)
         if not b_pos:

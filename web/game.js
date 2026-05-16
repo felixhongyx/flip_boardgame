@@ -464,6 +464,12 @@ class Game {
 
         this.rulePage = 0;
 
+        // 历史记录用于悔棋
+        this.history = [];
+
+        // AI定时器
+        this.aiTimers = [];
+
         this.bindEvents();
         this.render();
     }
@@ -499,6 +505,92 @@ class Game {
         return null;
     }
 
+    saveState() {
+        // 保存当前游戏状态
+        return {
+            board: this.board.copy(),
+            currentPlayer: this.currentPlayer,
+            state: this.state,
+            selectedPos: this.selectedPos ? [...this.selectedPos] : null,
+            pendingFlipGroups: JSON.parse(JSON.stringify(this.pendingFlipGroups)),
+            selectedFlipGroup: this.selectedFlipGroup,
+            chainHandler: {
+                player: this.chainHandler.player,
+                availableTriggers: this.chainHandler.availableTriggers.map(t => [...t]),
+                selectedTrigger: this.chainHandler.selectedTrigger ? [...this.chainHandler.selectedTrigger] : null,
+                previewFlips: this.chainHandler.previewFlips.map(f => [...f]),
+                availableGroups: JSON.parse(JSON.stringify(this.chainHandler.availableGroups)),
+                selectedGroup: this.chainHandler.selectedGroup
+            }
+        };
+    }
+
+    restoreState(state) {
+        // 恢复游戏状态
+        this.board = state.board;
+        this.flipRule = new FlipRule(this.board);
+        this.chainHandler = new ChainFlipHandler(this.board, this.flipRule);
+        this.chainHandler.player = state.chainHandler.player;
+        this.chainHandler.availableTriggers = state.chainHandler.availableTriggers;
+        this.chainHandler.selectedTrigger = state.chainHandler.selectedTrigger;
+        this.chainHandler.previewFlips = state.chainHandler.previewFlips;
+        this.chainHandler.availableGroups = state.chainHandler.availableGroups;
+        this.chainHandler.selectedGroup = state.chainHandler.selectedGroup;
+
+        this.currentPlayer = state.currentPlayer;
+        this.state = state.state;
+        this.selectedPos = state.selectedPos;
+        this.pendingFlipGroups = state.pendingFlipGroups;
+        this.selectedFlipGroup = state.selectedFlipGroup;
+    }
+
+    undo() {
+        // 清除所有AI定时器
+        this.clearAITimers();
+
+        if (this.history.length === 0) return;
+
+        // PVE模式下，悔棋需要回退两步（玩家一步+AI一步）
+        let steps = 1;
+        if (this.gameMode === 'pve') {
+            // 找到上一个玩家回合的状态
+            let found = false;
+            let tempHistory = [...this.history];
+            tempHistory.pop(); // 先去掉当前状态
+            for (let i = tempHistory.length - 1; i >= 0; i--) {
+                if (tempHistory[i].currentPlayer === 1 &&
+                    (tempHistory[i].state === STATE.SELECTING || tempHistory[i].state === STATE.MOVING)) {
+                    steps = this.history.length - i;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found && tempHistory.length > 0) {
+                steps = this.history.length;
+            }
+        }
+
+        // 回退
+        for (let i = 0; i < steps; i++) {
+            if (this.history.length > 1) {
+                this.history.pop();
+            }
+        }
+
+        if (this.history.length > 0) {
+            this.restoreState(this.history[this.history.length - 1]);
+        }
+
+        this.render();
+    }
+
+    clearAITimers() {
+        for (const timer of this.aiTimers) {
+            clearTimeout(timer);
+        }
+        this.aiTimers = [];
+    }
+
     bindEvents() {
         this.canvas.addEventListener('click', (e) => this.handleClick([e.clientX, e.clientY]));
         this.canvas.addEventListener('touchstart', (e) => {
@@ -514,6 +606,7 @@ class Game {
         document.getElementById('btn-confirm').addEventListener('click', () => this.confirmAction());
         document.getElementById('btn-skip').addEventListener('click', () => this.skipAction());
         document.getElementById('btn-restart').addEventListener('click', () => this.restart());
+        document.getElementById('btn-undo').addEventListener('click', () => this.undo());
 
         document.getElementById('btn-prev').addEventListener('click', () => this.prevRulePage());
         document.getElementById('btn-next').addEventListener('click', () => this.nextRulePage());
@@ -539,6 +632,9 @@ class Game {
             this.ai = new SimpleAI(2);
         }
 
+        // 初始化历史记录
+        this.history = [this.saveState()];
+
         document.getElementById('mode-select').style.display = 'none';
         document.getElementById('game-area').style.display = 'flex';
         this.render();
@@ -552,6 +648,7 @@ class Game {
     }
 
     backToMenu() {
+        this.clearAITimers();
         this.state = STATE.MODE_SELECT;
         document.getElementById('game-area').style.display = 'none';
         document.getElementById('mode-select').style.display = 'flex';
@@ -636,6 +733,7 @@ class Game {
     }
 
     doMove(from, to) {
+        this.history.push(this.saveState());
         this.board.movePiece(from, to);
         this.pendingFlipGroups = this.flipRule.getFlipGroupsAfterMove(this.currentPlayer, to);
         this.selectedFlipGroup = null;
@@ -651,6 +749,7 @@ class Game {
 
     confirmAction() {
         if (this.state === STATE.FLIPPING && this.selectedFlipGroup !== null) {
+            this.history.push(this.saveState());
             const group = this.pendingFlipGroups[this.selectedFlipGroup];
             for (const [pos, _] of group.flips) {
                 this.board.setPiece(pos, this.currentPlayer);
@@ -661,6 +760,7 @@ class Game {
                 this.endTurn();
             }
         } else if (this.state === STATE.CHAIN_FLIPPING && this.chainHandler.selectedTrigger !== null && this.chainHandler.selectedGroup !== null) {
+            this.history.push(this.saveState());
             const groups = this.chainHandler.availableGroups;
             const group = groups[this.chainHandler.selectedGroup];
             for (const [pos, _] of group.flips) {
@@ -688,6 +788,7 @@ class Game {
 
     skipAction() {
         if (this.state === STATE.FLIPPING || this.state === STATE.CHAIN_FLIPPING) {
+            this.history.push(this.saveState());
             this.endTurn();
             this.render();
         }
@@ -715,7 +816,8 @@ class Game {
         this.selectedPos = null;
 
         if (this.gameMode === 'pve' && this.currentPlayer === 2) {
-            setTimeout(() => this.doAIMove(), 600);
+            const timer = setTimeout(() => this.doAIMove(), 600);
+            this.aiTimers.push(timer);
         }
     }
 
@@ -729,12 +831,14 @@ class Game {
         this.state = STATE.MOVING;
         this.render();
 
-        setTimeout(() => {
+        const timer = setTimeout(() => {
             this.doMove(from, to);
             if (this.state === STATE.FLIPPING) {
-                setTimeout(() => this.doAIFlip(), 400);
+                const flipTimer = setTimeout(() => this.doAIFlip(), 400);
+                this.aiTimers.push(flipTimer);
             }
         }, 400);
+        this.aiTimers.push(timer);
     }
 
     doAIFlip() {
@@ -745,7 +849,8 @@ class Game {
         this.confirmAction();
 
         if (this.state === STATE.CHAIN_FLIPPING) {
-            setTimeout(() => this.doAIChain(), 400);
+            const timer = setTimeout(() => this.doAIChain(), 400);
+            this.aiTimers.push(timer);
         }
     }
 
@@ -763,11 +868,13 @@ class Game {
         this.confirmAction();
 
         if (this.state === STATE.CHAIN_FLIPPING) {
-            setTimeout(() => this.doAIChain(), 400);
+            const timer = setTimeout(() => this.doAIChain(), 400);
+            this.aiTimers.push(timer);
         }
     }
 
     restart() {
+        this.clearAITimers();
         this.board = new Board();
         this.flipRule = new FlipRule(this.board);
         this.chainHandler = new ChainFlipHandler(this.board, this.flipRule);
@@ -776,6 +883,7 @@ class Game {
         this.selectedPos = null;
         this.pendingFlipGroups = [];
         this.selectedFlipGroup = null;
+        this.history = [this.saveState()];
         this.render();
     }
 
@@ -944,7 +1052,10 @@ class Game {
         const messageEl = document.getElementById('message');
         const btnConfirm = document.getElementById('btn-confirm');
         const btnSkip = document.getElementById('btn-skip');
+        const btnUndo = document.getElementById('btn-undo');
         const btnRestart = document.getElementById('btn-restart');
+        const btnBack = document.getElementById('btn-back');
+        const gameButtons = document.getElementById('game-buttons');
 
         if (this.state === STATE.GAME_OVER) {
             let winner;
@@ -960,7 +1071,8 @@ class Game {
             messageEl.className = winner === 1 ? 'red' : 'blue';
             btnConfirm.style.display = 'none';
             btnSkip.style.display = 'none';
-            btnRestart.style.display = 'inline-block';
+            btnUndo.style.display = 'none';
+            gameButtons.style.display = 'flex';
         } else {
             let pName = `玩家${this.currentPlayer}`;
             if (this.gameMode === 'pve' && this.currentPlayer === 2) pName = 'AI';
@@ -988,6 +1100,17 @@ class Game {
                 btnConfirm.style.display = 'none';
                 btnSkip.style.display = 'none';
             }
+
+            // 悔棋按钮：只在玩家回合且AI没有思考时显示
+            if ((this.gameMode === 'pvp' || (this.gameMode === 'pve' && this.currentPlayer === 1)) &&
+                this.history.length > 1) {
+                btnUndo.style.display = 'inline-block';
+            } else {
+                btnUndo.style.display = 'none';
+            }
+
+            // 重开和返回主菜单按钮一直显示
+            gameButtons.style.display = 'flex';
         }
     }
 }

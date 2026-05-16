@@ -475,12 +475,10 @@ class Game {
     }
 
     resizeCanvas() {
-        const maxSize = Math.min(window.innerWidth - 40, 400);
-        const canvasSize = maxSize;
-        this.canvas.width = canvasSize;
-        this.canvas.height = canvasSize;
-        this.cellSize = (canvasSize - MARGIN * 2) / (GRID_SIZE - 1);
-        this.margin = MARGIN * (canvasSize / 400);
+        this.canvas.width = 400;
+        this.canvas.height = 400;
+        this.cellSize = (400 - MARGIN * 2) / (GRID_SIZE - 1);
+        this.margin = MARGIN;
     }
 
     posToScreen(pos) {
@@ -521,7 +519,8 @@ class Game {
                 previewFlips: this.chainHandler.previewFlips.map(f => [...f]),
                 availableGroups: JSON.parse(JSON.stringify(this.chainHandler.availableGroups)),
                 selectedGroup: this.chainHandler.selectedGroup
-            }
+            },
+            gameMode: this.gameMode
         };
     }
 
@@ -542,42 +541,36 @@ class Game {
         this.selectedPos = state.selectedPos;
         this.pendingFlipGroups = state.pendingFlipGroups;
         this.selectedFlipGroup = state.selectedFlipGroup;
+        if (state.gameMode) {
+            this.gameMode = state.gameMode;
+        }
     }
 
     undo() {
         // 清除所有AI定时器
         this.clearAITimers();
 
-        if (this.history.length === 0) return;
+        if (this.history.length <= 1) return;
 
-        // PVE模式下，悔棋需要回退两步（玩家一步+AI一步）
-        let steps = 1;
+        // PVE模式下，悔棋需要回退到上一个玩家1的SELECTING/MOVING状态
         if (this.gameMode === 'pve') {
-            // 找到上一个玩家回合的状态
-            let found = false;
-            let tempHistory = [...this.history];
-            tempHistory.pop(); // 先去掉当前状态
-            for (let i = tempHistory.length - 1; i >= 0; i--) {
-                if (tempHistory[i].currentPlayer === 1 &&
-                    (tempHistory[i].state === STATE.SELECTING || tempHistory[i].state === STATE.MOVING)) {
-                    steps = this.history.length - i;
-                    found = true;
+            // 找到上一个玩家1的SELECTING/MOVING状态
+            let targetIndex = -1;
+            for (let i = this.history.length - 2; i >= 0; i--) {
+                const s = this.history[i];
+                if (s.currentPlayer === 1 &&
+                    (s.state === STATE.SELECTING || s.state === STATE.MOVING)) {
+                    targetIndex = i;
                     break;
                 }
             }
-            if (!found && tempHistory.length > 0) {
-                steps = this.history.length;
+            if (targetIndex >= 0) {
+                this.history = this.history.slice(0, targetIndex + 1);
+                this.restoreState(this.history[this.history.length - 1]);
             }
-        }
-
-        // 回退
-        for (let i = 0; i < steps; i++) {
-            if (this.history.length > 1) {
-                this.history.pop();
-            }
-        }
-
-        if (this.history.length > 0) {
+        } else {
+            // PVP模式下回退一步
+            this.history.pop();
             this.restoreState(this.history[this.history.length - 1]);
         }
 
@@ -636,13 +629,14 @@ class Game {
         this.history = [this.saveState()];
 
         document.getElementById('mode-select').style.display = 'none';
-        document.getElementById('game-area').style.display = 'flex';
+        document.getElementById('rule-intro').style.display = 'none';
+        document.getElementById('game-area').style.display = 'block';
         this.render();
     }
 
     showRules() {
         document.getElementById('mode-select').style.display = 'none';
-        document.getElementById('rule-intro').style.display = 'flex';
+        document.getElementById('rule-intro').style.display = 'inline-block';
         this.rulePage = 0;
         this.updateRulePage();
     }
@@ -651,12 +645,13 @@ class Game {
         this.clearAITimers();
         this.state = STATE.MODE_SELECT;
         document.getElementById('game-area').style.display = 'none';
-        document.getElementById('mode-select').style.display = 'flex';
+        document.getElementById('rule-intro').style.display = 'none';
+        document.getElementById('mode-select').style.display = 'inline-block';
     }
 
     backToMenuFromRules() {
         document.getElementById('rule-intro').style.display = 'none';
-        document.getElementById('mode-select').style.display = 'flex';
+        document.getElementById('mode-select').style.display = 'inline-block';
     }
 
     prevRulePage() {
@@ -685,6 +680,9 @@ class Game {
 
     handleClick(pos) {
         if (this.state === STATE.MODE_SELECT || this.state === STATE.RULE_INTRO) return;
+
+        // PVE模式下，如果是AI的回合，玩家不能操作
+        if (this.gameMode === 'pve' && this.currentPlayer === 2) return;
 
         const bPos = this.screenToPos(pos);
 
@@ -1055,7 +1053,8 @@ class Game {
         const btnUndo = document.getElementById('btn-undo');
         const btnRestart = document.getElementById('btn-restart');
         const btnBack = document.getElementById('btn-back');
-        const gameButtons = document.getElementById('game-buttons');
+
+        if (!currentTurnEl) return; // 防止未加载完成
 
         if (this.state === STATE.GAME_OVER) {
             let winner;
@@ -1072,7 +1071,8 @@ class Game {
             btnConfirm.style.display = 'none';
             btnSkip.style.display = 'none';
             btnUndo.style.display = 'none';
-            gameButtons.style.display = 'flex';
+            btnRestart.style.display = 'inline-block';
+            btnBack.style.display = 'inline-block';
         } else {
             let pName = `玩家${this.currentPlayer}`;
             if (this.gameMode === 'pve' && this.currentPlayer === 2) pName = 'AI';
@@ -1110,7 +1110,8 @@ class Game {
             }
 
             // 重开和返回主菜单按钮一直显示
-            gameButtons.style.display = 'flex';
+            btnRestart.style.display = 'inline-block';
+            btnBack.style.display = 'inline-block';
         }
     }
 }

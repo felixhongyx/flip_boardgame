@@ -2,6 +2,9 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>翻转棋</title>
     <style>
@@ -9,88 +12,89 @@
             margin: 0;
             padding: 0;
             box-sizing: border-box;
-            touch-action: manipulation;
         }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            font-family: Arial, sans-serif;
             background: #f5deb3;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            min-height: 100vh;
-            padding: 10px;
-        }
-        #game-container {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            width: 100%;
-            max-width: 500px;
+            text-align: center;
+            padding: 20px;
         }
         h1 {
             color: #333;
-            margin-bottom: 10px;
-            font-size: 24px;
-        }
-        #canvas-container {
-            position: relative;
-            margin-bottom: 10px;
+            margin-bottom: 15px;
+            font-size: 28px;
         }
         canvas {
             border: 2px solid #333;
             border-radius: 5px;
             background: #f5deb3;
         }
-        #ui {
+        .ui-bar {
             display: flex;
             justify-content: space-between;
-            width: 100%;
             max-width: 400px;
-            padding: 10px;
-            background: rgba(255,255,255,0.5);
+            margin: 10px auto;
+            padding: 8px 12px;
+            background: rgba(255,255,255,0.6);
             border-radius: 8px;
             font-size: 16px;
         }
-        #buttons {
-            display: flex;
-            gap: 10px;
-            margin-top: 10px;
+        .button-group {
+            margin: 8px 0;
+            min-height: 40px;
         }
         button {
-            padding: 10px 20px;
-            font-size: 16px;
+            padding: 8px 16px;
+            font-size: 14px;
             border: none;
-            border-radius: 8px;
+            border-radius: 6px;
             cursor: pointer;
             background: #64c864;
             color: #000;
+            margin: 0 4px;
         }
-        button:hover, button:active {
+        button:hover {
             background: #78dc78;
         }
         button.danger {
             background: #dc6464;
         }
-        button.danger:hover, button.danger:active {
+        button.danger:hover {
             background: #f07878;
         }
-        #message {
+        button.secondary {
+            background: #88b8e8;
+        }
+        button.secondary:hover {
+            background: #9cccf8;
+        }
+        .message {
             font-size: 18px;
             font-weight: bold;
-            margin-top: 10px;
+            margin: 10px 0;
             min-height: 28px;
         }
         .red { color: #dc3232; }
         .blue { color: #3232dc; }
-        #mode-select, #rule-intro {
-            display: flex;
-            flex-direction: column;
-            gap: 15px;
-            align-items: center;
+        .menu-panel {
+            display: inline-block;
             background: rgba(255,255,255,0.9);
             padding: 30px;
             border-radius: 15px;
+        }
+        .menu-panel button {
+            display: block;
+            width: 150px;
+            margin: 10px auto;
+        }
+        .rule-panel {
+            display: none;
+            background: rgba(255,255,255,0.9);
+            padding: 30px;
+            border-radius: 15px;
+            max-width: 400px;
+            margin: 0 auto;
+            text-align: left;
         }
         .rule-page {
             display: none;
@@ -98,90 +102,95 @@
         .rule-page.active {
             display: block;
         }
-        #rule-text {
-            text-align: left;
-            max-width: 350px;
+        .rule-page p {
+            margin: 10px 0;
             line-height: 1.6;
         }
         .rule-nav {
-            display: flex;
-            gap: 10px;
-            justify-content: center;
+            text-align: center;
             margin-top: 20px;
         }
-        #page-indicator {
+        .page-indicator {
             font-size: 14px;
             color: #666;
+            margin-top: 10px;
         }
     </style>
 </head>
 <body>
-    <div id="game-container">
-        <div id="mode-select">
-            <h1>翻转棋</h1>
-            <button id="btn-pvp">双人对战</button>
-            <button id="btn-pve">人机对战</button>
-            <button id="btn-rules">规则介绍</button>
-        </div>
+    <!-- 主菜单 -->
+    <div id="mode-select" class="menu-panel">
+        <h1>翻转棋</h1>
+        <button id="btn-pvp">双人对战</button>
+        <button id="btn-pve">人机对战</button>
+        <button id="btn-rules">规则介绍</button>
+    </div>
 
-        <div id="rule-intro" style="display: none;">
-            <h1>游戏规则</h1>
-            <div id="rule-text">
-                <div class="rule-page active" data-page="0">
-                    <p>棋盘为7x7的交叉点，双方各14个棋子。</p>
-                    <p>红方先手，轮流走棋。</p>
-                    <p>全棋盘X形：棋子沿横竖或任意斜线走一格。</p>
-                    <p>可跳跃：跳过紧挨着的棋子，落到对面空位。</p>
-                    <p><strong>获胜条件：对方无子可走，或对方棋子为0！</strong></p>
-                </div>
-                <div class="rule-page" data-page="1">
-                    <h3>规则A：己-敌-己</h3>
-                    <p>走棋后，如果己方两子中间夹一个敌方，就可以把中间的敌人翻转！</p>
-                </div>
-                <div class="rule-page" data-page="2">
-                    <h3>规则B：敌-己-敌</h3>
-                    <p>走棋后，如果己方棋子插到两个敌方中间，可以把两边敌人同时翻转！</p>
-                </div>
-                <div class="rule-page" data-page="3">
-                    <h3>规则C：连锁翻转</h3>
-                    <p>一次翻转后，如果又满足新的规则，可以选择继续翻转或跳过！</p>
-                </div>
-                <div class="rule-page" data-page="4">
-                    <h3>胜利条件</h3>
-                    <p>1. 对方棋子归零</p>
-                    <p>2. 对方无法走棋</p>
-                </div>
+    <!-- 规则介绍 -->
+    <div id="rule-intro" class="rule-panel">
+        <h1 style="text-align:center;">游戏规则</h1>
+        <div id="rule-text">
+            <div class="rule-page active" data-page="0">
+                <p>棋盘为7x7的交叉点，双方各14个棋子。</p>
+                <p>红方先手，轮流走棋。</p>
+                <p>全棋盘X形：棋子沿横竖或任意斜线走一格。</p>
+                <p>可跳跃：跳过一条线上多个紧挨着的同阵营棋子（可以全是己方，也可以全是敌方），落到对面空位。</p>
+                <p><strong>获胜条件：对方无子可走，或对方棋子为0！</strong></p>
             </div>
-            <div id="page-indicator">1/5</div>
-            <div class="rule-nav">
-                <button id="btn-prev" style="display: none;">上一步</button>
-                <button id="btn-next">下一步</button>
-                <button id="btn-back-rules" style="display: none;">返回</button>
+            <div class="rule-page" data-page="1">
+                <h3>规则A：己-敌-己</h3>
+                <p>走棋后，如果己方两子中间夹一个敌方，就可以把中间的敌人翻转！</p>
+            </div>
+            <div class="rule-page" data-page="2">
+                <h3>规则B：敌-己-敌</h3>
+                <p>走棋后，如果己方棋子插到两个敌方中间，可以把两边敌人同时翻转！</p>
+            </div>
+            <div class="rule-page" data-page="3">
+                <h3>规则C：连锁翻转</h3>
+                <p>一次翻转后，如果又满足新的规则，可以选择继续翻转或跳过！</p>
+            </div>
+            <div class="rule-page" data-page="4">
+                <h3>胜利条件</h3>
+                <p>1. 对方棋子归零</p>
+                <p>2. 对方无法走棋</p>
             </div>
         </div>
-
-        <div id="game-area" style="display: none;">
-            <h1>翻转棋</h1>
-            <div id="canvas-container">
-                <canvas id="board" width="400" height="400"></canvas>
-            </div>
-            <div id="ui">
-                <span id="current-turn"></span>
-                <span id="score"></span>
-            </div>
-            <div id="message"></div>
-            <div id="buttons">
-                <button id="btn-confirm" style="display: none;">确认</button>
-                <button id="btn-skip" class="danger" style="display: none;">跳过</button>
-                <button id="btn-undo" style="display: none;">悔棋</button>
-            </div>
-            <div id="game-buttons" style="display: flex; gap: 10px; margin-top: 10px;">
-                <button id="btn-restart" style="font-size: 14px;">重新开始</button>
-                <button id="btn-back" style="font-size: 14px;">返回主菜单</button>
-            </div>
+        <div class="page-indicator" id="page-indicator">1/5</div>
+        <div class="rule-nav">
+            <button id="btn-prev" style="display: none;">上一步</button>
+            <button id="btn-next">下一步</button>
+            <button id="btn-back-rules" style="display: none;">返回</button>
         </div>
     </div>
 
-    <script src="game.js"></script>
+    <!-- 游戏区域 -->
+    <div id="game-area" style="display: none;">
+        <h1>翻转棋</h1>
+        <canvas id="board" width="400" height="400"></canvas>
+        <div class="ui-bar">
+            <span id="current-turn"></span>
+            <span id="score"></span>
+        </div>
+        <div class="message" id="message"></div>
+
+        <!-- 翻转/跳过按钮 -->
+        <div class="button-group">
+            <button id="btn-confirm" style="display: none;">确认</button>
+            <button id="btn-skip" class="danger" style="display: none;">跳过</button>
+        </div>
+
+        <!-- 悔棋按钮 -->
+        <div class="button-group">
+            <button id="btn-undo" class="secondary" style="display: none;">悔棋</button>
+        </div>
+
+        <!-- 重开/返回菜单按钮 -->
+        <div class="button-group">
+            <button id="btn-restart" class="secondary">重新开始</button>
+            <button id="btn-back" class="secondary">返回主菜单</button>
+        </div>
+    </div>
+
+    <script src="game.js?v=3"></script>
 </body>
 </html>

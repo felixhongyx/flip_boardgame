@@ -48,18 +48,8 @@ class Board {
         const dy = ty - fy;
 
         if (dx === 0 || dy === 0) return true;
-        if (Math.abs(dx) !== 1 || Math.abs(dy) !== 1) return false;
-
-        const gy = Math.min(fy, ty);
-        if (gy === 2 || gy === 3) return true;
-
-        if (gy % 2 === 1) {
-            return (fx === tx - 1 && fy === gy && ty === gy + 1) ||
-                   (fx === tx + 1 && fy === gy + 1 && ty === gy);
-        } else {
-            return (fx === tx + 1 && fy === gy && ty === gy + 1) ||
-                   (fx === tx - 1 && fy === gy + 1 && ty === gy);
-        }
+        if (Math.abs(dx) === 1 && Math.abs(dy) === 1) return true; // 全棋盘X形
+        return false;
     }
 
     getValidMoves(player, from = null) {
@@ -84,11 +74,55 @@ class Board {
         ];
 
         for (const [dx, dy] of directions) {
+            // 1. 走一格
             const tx = fx + dx;
             const ty = fy + dy;
             if (tx >= 0 && tx < GRID_SIZE && ty >= 0 && ty < GRID_SIZE) {
                 if (this.grid[ty][tx] === 0 && this.hasConnection(from, [tx, ty])) {
                     valid.push([tx, ty]);
+                }
+            }
+
+            // 2. 跳过N个同阵营棋子（可以是N个己方或N个敌方，不能混合）
+            let firstPiece = null;
+            let step = 1;
+            while (true) {
+                const cx = fx + step * dx;
+                const cy = fy + step * dy;
+                if (cx < 0 || cx >= GRID_SIZE || cy < 0 || cy >= GRID_SIZE) {
+                    break; // 出界
+                }
+                const piece = this.grid[cy][cx];
+                if (piece === 0) {
+                    // 遇到空位，如果之前已经跳过了至少一个同阵营棋子，那么这个空位是有效的落点
+                    if (firstPiece !== null) {
+                        // 检查连接性：每一步都需要有连接
+                        let validJump = true;
+                        let prevPos = from;
+                        for (let s = 1; s <= step; s++) {
+                            const checkPos = [fx + s * dx, fy + s * dy];
+                            if (!this.hasConnection(prevPos, checkPos)) {
+                                validJump = false;
+                                break;
+                            }
+                            prevPos = checkPos;
+                        }
+                        if (validJump) {
+                            valid.push([cx, cy]);
+                        }
+                    }
+                    break; // 无论是否跳成功，遇到空位就停止这个方向
+                } else {
+                    // 遇到棋子
+                    if (firstPiece === null) {
+                        firstPiece = piece; // 记录第一个棋子的阵营
+                    } else {
+                        if (piece !== firstPiece) {
+                            break; // 遇到不同阵营，无法继续跳过
+                        }
+                    }
+                    // 继续检查下一个位置
+                    step++;
                 }
             }
         }
@@ -668,7 +702,10 @@ class Game {
             return;
         }
 
+        // 先切换玩家
         this.currentPlayer = 3 - this.currentPlayer;
+
+        // 检查对方是否无子可走
         if (!this.board.hasAnyMove(this.currentPlayer)) {
             this.state = STATE.GAME_OVER;
             return;
@@ -775,36 +812,23 @@ class Game {
         }
 
         ctx.lineWidth = 1;
+        // 全棋盘X形
         for (let gy = 0; gy < GRID_SIZE - 1; gy++) {
             for (let gx = 0; gx < GRID_SIZE - 1; gx++) {
-                if (gy === 2 || gy === 3) {
-                    let [sx, sy] = this.posToScreen([gx, gy]);
-                    let [ex, ey] = this.posToScreen([gx + 1, gy + 1]);
-                    ctx.beginPath();
-                    ctx.moveTo(sx, sy);
-                    ctx.lineTo(ex, ey);
-                    ctx.stroke();
-
-                    [sx, sy] = this.posToScreen([gx + 1, gy]);
-                    [ex, ey] = this.posToScreen([gx, gy + 1]);
-                    ctx.beginPath();
-                    ctx.moveTo(sx, sy);
-                    ctx.lineTo(ex, ey);
-                    ctx.stroke();
-                } else {
-                    let sx, sy, ex, ey;
-                    if (gy % 2 === 1) {
-                        [sx, sy] = this.posToScreen([gx, gy]);
-                        [ex, ey] = this.posToScreen([gx + 1, gy + 1]);
-                    } else {
-                        [sx, sy] = this.posToScreen([gx + 1, gy]);
-                        [ex, ey] = this.posToScreen([gx, gy + 1]);
-                    }
-                    ctx.beginPath();
-                    ctx.moveTo(sx, sy);
-                    ctx.lineTo(ex, ey);
-                    ctx.stroke();
-                }
+                // 右下斜 \
+                let [sx, sy] = this.posToScreen([gx, gy]);
+                let [ex, ey] = this.posToScreen([gx + 1, gy + 1]);
+                ctx.beginPath();
+                ctx.moveTo(sx, sy);
+                ctx.lineTo(ex, ey);
+                ctx.stroke();
+                // 右上斜 /
+                [sx, sy] = this.posToScreen([gx + 1, gy]);
+                [ex, ey] = this.posToScreen([gx, gy + 1]);
+                ctx.beginPath();
+                ctx.moveTo(sx, sy);
+                ctx.lineTo(ex, ey);
+                ctx.stroke();
             }
         }
     }
@@ -923,7 +947,14 @@ class Game {
         const btnRestart = document.getElementById('btn-restart');
 
         if (this.state === STATE.GAME_OVER) {
-            const winner = this.board.countPieces(1) === 0 ? 2 : (this.board.countPieces(2) === 0 ? 1 : (this.currentPlayer === 1 ? 2 : 1));
+            let winner;
+            const p1Count = this.board.countPieces(1);
+            const p2Count = this.board.countPieces(2);
+
+            if (p1Count === 0) winner = 2;
+            else if (p2Count === 0) winner = 1;
+            else winner = this.currentPlayer === 1 ? 2 : 1;
+
             currentTurnEl.textContent = '';
             messageEl.textContent = `玩家${winner}获胜！`;
             messageEl.className = winner === 1 ? 'red' : 'blue';

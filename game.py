@@ -95,6 +95,9 @@ class Game:
         self.after_anim_state = None
         self.after_anim_data = None
 
+        # 悔棋历史
+        self.history = []
+
         self.logger.log_board_state(self.board.grid)
 
     def set_mode(self, mode: str):
@@ -102,7 +105,33 @@ class Game:
         if mode == 'pve':
             self.ai_player = AIPlayer(2)
         self.state = Game.SELECTING
+        self.history = []  # 重置历史
         self.logger.log_turn_start(1)
+
+    def save_state(self):
+        """保存当前游戏状态到历史"""
+        state = {
+            'board': [row[:] for row in self.board.grid],
+            'current_player': self.current_player,
+            'state': self.state,
+        }
+        self.history.append(state)
+
+    def undo(self):
+        """悔棋：恢复到上一个状态"""
+        if not self.history:
+            return False
+        state = self.history.pop()
+        self.board.grid = state['board']
+        self.current_player = state['current_player']
+        self.state = state['state']
+        self.selected_pos = None
+        self.pending_flips = []
+        self.pending_flip_groups = []
+        self.selected_flip_group = None
+        # 重置chain handler
+        self.chain_handler = ChainFlipHandler(self.board, self.flip_rule)
+        return True
 
     def select_piece(self, pos: Tuple[int, int]) -> bool:
         if self.state != Game.SELECTING:
@@ -132,6 +161,7 @@ class Game:
         return True
 
     def do_real_move(self, from_pos, to_pos):
+        self.save_state()
         self.board.move_piece(from_pos, to_pos)
         self.logger.log_move(self.current_player, from_pos, to_pos)
         self.logger.log_board_state(self.board.grid)
@@ -221,6 +251,7 @@ class Game:
         self.state = Game.ANIMATING
 
     def do_real_flip(self, flip_list, reasons):
+        self.save_state()
         for i, (pos, player) in enumerate(flip_list):
             self.board.set_piece(pos, player)
             self.logger.log_flip(player, pos, reasons[i])
@@ -275,6 +306,7 @@ class Game:
 
     def do_real_chain_flip(self, flip_list, reasons):
         # 用ChainFlipHandler来处理实际的逻辑，它会正确更新状态
+        self.save_state()
         for i, (pos, player) in enumerate(flip_list):
             self.board.set_piece(pos, player)
             self.logger.log_flip(player, pos, reasons[i])
@@ -325,13 +357,17 @@ class Game:
             self.logger.log_game_over(1)
             return
 
+        # 先切换玩家
         self.current_player = 3 - self.current_player
+
+        # 检查对方是否无子可走
         if not self.board.has_any_move(self.current_player):
             winner = 3 - self.current_player
             self.state = Game.GAME_OVER
             self.logger.log(f"玩家{self.current_player}无子可走！玩家{winner}获胜！")
             self.logger.log_game_over(winner)
             return
+
         self.state = Game.SELECTING
         self.selected_pos = None
         self.logger.log_turn_start(self.current_player)
@@ -451,9 +487,9 @@ class GUI:
         desc = [
             "棋盘为7x7的交叉点，双方各14个棋子",
             "红方先手，轮流走棋",
-            "棋子沿横竖或斜线走一格",
-            "斜线：奇数行右下斜，偶数行右上斜",
-            "中间两行（第3、4行）是X形，两个方向都可以走！"
+            "全棋盘X形：棋子沿横竖或任意斜线走一格",
+            "可跳跃：跳过紧挨着的棋子，落到对面空位",
+            "获胜条件：对方无子可走，或对方棋子为0"
         ]
         y = 100
         for line in desc:
@@ -609,27 +645,17 @@ class GUI:
             s, e = (x + gx * cell, y), (x + gx * cell, y + (GRID_SIZE - 1) * cell)
             pygame.draw.line(self.screen, BLACK, s, e, 2)
 
+        # 全棋盘X形
         for gy in range(GRID_SIZE - 1):
             for gx in range(GRID_SIZE - 1):
-                # 中间两行（第2、3行）画X形两个方向
-                if gy == 2 or gy == 3:
-                    # 右下斜 \
-                    s = (x + gx * cell, y + gy * cell)
-                    e = (x + (gx + 1) * cell, y + (gy + 1) * cell)
-                    pygame.draw.line(self.screen, BLACK, s, e, 1)
-                    # 右上斜 /
-                    s = (x + (gx + 1) * cell, y + gy * cell)
-                    e = (x + gx * cell, y + (gy + 1) * cell)
-                    pygame.draw.line(self.screen, BLACK, s, e, 1)
-                else:
-                    # 普通行只画一个方向
-                    if gy % 2 == 1:
-                        s = (x + gx * cell, y + gy * cell)
-                        e = (x + (gx + 1) * cell, y + (gy + 1) * cell)
-                    else:
-                        s = (x + (gx + 1) * cell, y + gy * cell)
-                        e = (x + gx * cell, y + (gy + 1) * cell)
-                    pygame.draw.line(self.screen, BLACK, s, e, 1)
+                # 右下斜 \
+                s = (x + gx * cell, y + gy * cell)
+                e = (x + (gx + 1) * cell, y + (gy + 1) * cell)
+                pygame.draw.line(self.screen, BLACK, s, e, 1)
+                # 右上斜 /
+                s = (x + (gx + 1) * cell, y + gy * cell)
+                e = (x + gx * cell, y + (gy + 1) * cell)
+                pygame.draw.line(self.screen, BLACK, s, e, 1)
 
         # 画棋子（注意数组索引是[行][列]=[y][x]）
         for gy in range(GRID_SIZE):
@@ -652,27 +678,17 @@ class GUI:
             s, e = self.pos_to_screen((gx, 0)), self.pos_to_screen((gx, GRID_SIZE - 1))
             pygame.draw.line(self.screen, BLACK, s, e, 2)
 
+        # 全棋盘X形：所有格子都画两个方向的斜线
         for gy in range(GRID_SIZE - 1):
             for gx in range(GRID_SIZE - 1):
-                # 中间两行（第2、3行）画X形两个方向
-                if gy == 2 or gy == 3:
-                    # 右下斜 \
-                    s = self.pos_to_screen((gx, gy))
-                    e = self.pos_to_screen((gx + 1, gy + 1))
-                    pygame.draw.line(self.screen, BLACK, s, e, 1)
-                    # 右上斜 /
-                    s = self.pos_to_screen((gx + 1, gy))
-                    e = self.pos_to_screen((gx, gy + 1))
-                    pygame.draw.line(self.screen, BLACK, s, e, 1)
-                else:
-                    # 普通行只画一个方向
-                    if gy % 2 == 1:
-                        s = self.pos_to_screen((gx, gy))
-                        e = self.pos_to_screen((gx + 1, gy + 1))
-                    else:
-                        s = self.pos_to_screen((gx + 1, gy))
-                        e = self.pos_to_screen((gx, gy + 1))
-                    pygame.draw.line(self.screen, BLACK, s, e, 1)
+                # 右下斜 \
+                s = self.pos_to_screen((gx, gy))
+                e = self.pos_to_screen((gx + 1, gy + 1))
+                pygame.draw.line(self.screen, BLACK, s, e, 1)
+                # 右上斜 /
+                s = self.pos_to_screen((gx + 1, gy))
+                e = self.pos_to_screen((gx, gy + 1))
+                pygame.draw.line(self.screen, BLACK, s, e, 1)
 
         for xc in range(GRID_SIZE):
             txt = self.small_font.render(str(xc), True, BLACK)

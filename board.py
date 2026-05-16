@@ -31,7 +31,7 @@ class Board:
         self.grid[y][x] = player
 
     def has_connection(self, from_pos: Tuple[int, int], to_pos: Tuple[int, int]) -> bool:
-        """检查两点之间是否有连线（根据棋盘设计）"""
+        """检查两点之间是否有连线（全棋盘X形）"""
         fx, fy = from_pos
         tx, ty = to_pos
 
@@ -42,26 +42,11 @@ class Board:
         if dx == 0 or dy == 0:
             return True
 
-        # 只能走一格斜
-        if abs(dx) != 1 or abs(dy) != 1:
-            return False
-
-        # 确定这两个点属于哪个格子的斜线
-        gy = min(fy, ty)
-
-        # 中间两行（第2、3行）是X形，两个方向斜线都允许
-        if gy == 2 or gy == 3:
+        # 只能走一格斜，且任意斜向都允许（全棋盘X形）
+        if abs(dx) == 1 and abs(dy) == 1:
             return True
 
-        # 检查是否有对应斜线（与draw_board一致）
-        if gy % 2 == 1:
-            # 奇数行: 右下斜 \ (连接 (x, gy) 和 (x+1, gy+1))
-            return (fx == tx - 1 and fy == gy and ty == gy + 1) or \
-                   (fx == tx + 1 and fy == gy + 1 and ty == gy)
-        else:
-            # 偶数行: 右上斜 / (连接 (x+1, gy) 和 (x, gy+1))
-            return (fx == tx + 1 and fy == gy and ty == gy + 1) or \
-                   (fx == tx - 1 and fy == gy + 1 and ty == gy)
+        return False
 
     def get_valid_moves(self, player: int, from_pos: Optional[Tuple[int, int]] = None) -> List[Tuple[int, int]]:
         """获取合法移动"""
@@ -78,14 +63,45 @@ class Board:
                       (-1, 1), (0, 1), (1, 1)]
 
         for dx, dy in directions:
+            # 1. 走一格
             tx, ty = fx + dx, fy + dy
-            # 检查是否在棋盘范围内
             if 0 <= tx < GRID_SIZE and 0 <= ty < GRID_SIZE:
-                # 检查终点是否为空
-                if self.grid[ty][tx] == 0:
-                    # 检查是否有连线
-                    if self.has_connection(from_pos, (tx, ty)):
-                        valid.append((tx, ty))
+                if self.grid[ty][tx] == 0 and self.has_connection(from_pos, (tx, ty)):
+                    valid.append((tx, ty))
+
+            # 2. 跳过N个同阵营棋子（可以是N个己方或N个敌方，不能混合）
+            # 从紧邻的第一个棋子开始检查
+            first_piece = None
+            step = 1
+            while True:
+                cx, cy = fx + step * dx, fy + step * dy
+                if not (0 <= cx < GRID_SIZE and 0 <= cy < GRID_SIZE):
+                    break  # 出界
+                piece = self.grid[cy][cx]
+                if piece == 0:
+                    # 遇到空位，如果之前已经跳过了至少一个同阵营棋子，那么这个空位是有效的落点
+                    if first_piece is not None:
+                        # 检查连接性：每一步都需要有连接
+                        valid_jump = True
+                        prev_pos = from_pos
+                        for s in range(1, step + 1):
+                            check_pos = (fx + s * dx, fy + s * dy)
+                            if not self.has_connection(prev_pos, check_pos):
+                                valid_jump = False
+                                break
+                            prev_pos = check_pos
+                        if valid_jump:
+                            valid.append((cx, cy))
+                    break  # 无论是否跳成功，遇到空位就停止这个方向
+                else:
+                    # 遇到棋子
+                    if first_piece is None:
+                        first_piece = piece  # 记录第一个棋子的阵营
+                    else:
+                        if piece != first_piece:
+                            break  # 遇到不同阵营，无法继续跳过
+                    # 继续检查下一个位置
+                    step += 1
 
         return valid
 
